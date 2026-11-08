@@ -126,6 +126,7 @@ input.inline { width: 72px; padding: 3px 6px; text-align: right; font-family: va
     <nav class="tabs" role="tablist">
       <button role="tab" data-tab="restock" aria-selected="true">Restock plan</button>
       <button role="tab" data-tab="sales" aria-selected="false">Sales</button>
+      <button role="tab" data-tab="sizes" aria-selected="false">Size mix</button>
       <button role="tab" data-tab="outs" aria-selected="false">Stock-outs</button>
       <button role="tab" data-tab="upload" aria-selected="false">Upload files</button>
       <button role="tab" data-tab="settings" aria-selected="false">Lead times &amp; settings</button>
@@ -145,6 +146,7 @@ input.inline { width: 72px; padding: 3px 6px; text-align: right; font-family: va
     rf: { q: "", status: "all" }, sf: { range: "all", loc: "all", item: "all", group: "month" }, of: { item: "" }, detail: null, confirm: null, busy: null, offline: false };
   const app = document.getElementById("app");
   try { const t = localStorage.getItem("kondura-tab3"); if (t) S.tab = t; } catch (e) {}
+  S.zf = { mode: "pct", by: "item", q: "" };
   S.upcoming = null; S.upImp = null; S.collapsed = new Set(); S.collapseInit = false;
   try { const c = localStorage.getItem("kondura-collapsed"); if (c) { S.collapsed = new Set(JSON.parse(c)); S.collapseInit = true; } } catch (e) {}
   const saveCollapsed = () => { S.collapseInit = true; try { localStorage.setItem("kondura-collapsed", JSON.stringify([...S.collapsed])); } catch (e) {} };
@@ -351,7 +353,7 @@ input.inline { width: 72px; padding: 3px 6px; text-align: right; font-family: va
     if (S.slow) top += `<div class="banner"><span>The saved data isn't answering yet. What you see may be out of date.</span></div>`;
     if (S.sample) top += `<div class="banner info"><span><b>Sample data, not saved.</b> Made-up shops and numbers to show how it works. Upload Kondura's stock movement export to see real numbers.</span><button class="btn sm" data-act="exit-sample">Hide sample</button></div>`;
     if (S.busy) top += `<div class="banner info"><span>${esc(S.busy)}</span></div>`;
-    const v = { restock: viewRestock, sales: viewSales, outs: viewOuts, upload: viewUpload, settings: viewSettings }[S.tab] || viewRestock;
+    const v = { restock: viewRestock, sales: viewSales, sizes: viewSizes, outs: viewOuts, upload: viewUpload, settings: viewSettings }[S.tab] || viewRestock;
     app.innerHTML = top + v();
     if (S.detail) renderDetail();
     const dz = document.getElementById("drop");
@@ -435,6 +437,45 @@ input.inline { width: 72px; padding: 3px 6px; text-align: right; font-family: va
       <div class="tablebox"><table><thead><tr><th>Product / size</th><th class="r">Received</th><th class="r">Net sold</th><th class="r">Return %</th><th class="r">On hand</th><th class="r">Upcoming</th><th class="r">Days low / out</th><th class="r">Demand / mo</th><th class="r">Days left</th><th class="r">Need</th><th class="r">Restock</th><th class="r">Air / Sea</th><th class="r">Share</th><th>Status</th><th>Why</th></tr></thead>
       <tbody>${table || `<tr><td colspan="15" class="muted">Nothing matches this filter.</td></tr>`}</tbody></table></div>
       <p class="small muted" style="padding:10px 16px">Click a product to show or hide its sizes; click a size for the shop breakdown. Upcoming = Odoo forecasted − on hand: positive is stock arriving, negative is reserved for customer orders not yet picked up or delivered. Type a number to override a size; clear it to go back to the Odoo figure.</p></section>`;
+  }
+
+  function viewSizes() {
+    const c = calc(); if (!c) return emptyState();
+    const z = S.zf, st = S.settings;
+    const fam = (name) => name.split(/\s+-\s+/)[0].trim();
+    const groups = new Map();
+    for (const it of c.items) {
+      const key = z.by === "family" ? fam(it.item) : it.item;
+      let r = groups.get(key); if (!r) { r = { name: key, n: 0, sizes: new Map() }; groups.set(key, r); } r.n++;
+      for (const g of it.sizes) { let x = r.sizes.get(g.size); if (!x) { x = { rate: 0, net: 0, days: Infinity }; r.sizes.set(g.size, x); } x.rate += g.rate; x.net += g.net; x.days = Math.min(x.days, g.inStockDays); }
+    }
+    let rows = [...groups.values()];
+    const q = z.q.trim().toLowerCase(); if (q) rows = rows.filter((r) => r.name.toLowerCase().includes(q));
+    rows.forEach((r) => { r.rate = [...r.sizes.values()].reduce((a, x) => a + x.rate, 0); r.net = [...r.sizes.values()].reduce((a, x) => a + x.net, 0); });
+    rows.sort((a, b) => b.rate - a.rate);
+    const sizes = [...new Set(rows.flatMap((r) => [...r.sizes.keys()]))].sort(sizeSort);
+    const total = { name: "All shown", sizes: new Map(), rate: 0, net: 0 };
+    for (const r of rows) for (const [k, x] of r.sizes) { let t = total.sizes.get(k); if (!t) { t = { rate: 0, net: 0, days: Infinity }; total.sizes.set(k, t); } t.rate += x.rate; t.net += x.net; t.days = Math.min(t.days, x.days); total.rate += x.rate; total.net += x.net; }
+    const cell = (r, size, isTotal) => {
+      const x = r.sizes.get(size); if (!x) return `<td class="r muted">·</td>`;
+      const pctV = r.rate ? x.rate / r.rate : 0, raw = r.net ? x.net / r.net : 0;
+      const maxP = Math.max(...[...r.sizes.values()].map((y) => (r.rate ? y.rate / r.rate : 0)), 0.0001);
+      const low = x.days < 30;
+      const title = `${n1(x.rate * 30)} / month on in-stock days · ${x.days === Infinity ? 0 : x.days} in-stock days · raw sales share ${pct(raw)}`;
+      let main, sub = "";
+      if (z.mode === "pct") { main = (pctV * 100).toFixed(1) + "%"; const d = (pctV - raw) * 100; if (Math.abs(d) >= 2) sub = `<div class="small" style="color:${d > 0 ? "var(--bad)" : "var(--muted)"}">sold ${(raw * 100).toFixed(0)}% ${d > 0 ? "▲" : "▼"}</div>`; }
+      else if (z.mode === "mo") main = n1(x.rate * 30);
+      else main = (raw * 100).toFixed(1) + "%";
+      const share = z.mode === "raw" ? raw / Math.max(...[...r.sizes.values()].map((y) => (r.net ? y.net / r.net : 0)), 0.0001) : pctV / maxP;
+      return `<td class="heat" title="${esc(title)}" style="background:color-mix(in srgb, var(--accent) ${Math.round(share * 38)}%, transparent)${isTotal ? ";font-weight:600" : ""}">${main}${low && !isTotal ? '<span class="muted" title="Fewer than 30 in-stock days: less reliable"> *</span>' : ""}${sub}</td>`;
+    };
+    const seg = (key, opts) => `<div class="seg" role="group">${opts.map(([v, l]) => `<button type="button" aria-pressed="${z[key] === v}" data-z${key}="${v}">${l}</button>`).join("")}</div>`;
+    return `<section class="panel"><div class="panel-head"><div class="stack"><h2>Size mix on in-stock days</h2><p class="muted small">Each size's share of demand, counting only days that size had ≥ ${st.minStock} units across sellable locations${st.windowDays > 0 ? ` in the last ${st.windowDays} days` : ""}. Sizes that sold out often look smaller in raw sales; this removes that. Use it as the size split for production.</p></div>
+      <div class="row">${seg("by", [["item", "Per product"], ["family", "Per family"]])}${seg("mode", [["pct", "In-stock mix %"], ["mo", "Demand / month"], ["raw", "Raw sales %"]])}<input id="z-q" type="search" placeholder="Search" value="${esc(z.q)}" style="width:170px"></div></div>
+      <div class="tablebox"><table><thead><tr><th>${z.by === "family" ? "Family" : "Product"}</th>${sizes.map((x) => `<th class="r">${esc(x)}</th>`).join("")}<th class="r">Demand / mo</th></tr></thead>
+      <tbody>${rows.map((r) => `<tr><td style="min-width:200px"><b>${esc(r.name)}</b>${z.by === "family" ? `<div class="small muted">${r.n} product${r.n > 1 ? "s" : ""}</div>` : ""}</td>${sizes.map((x) => cell(r, x)).join("")}<td class="r num">${n1(r.rate * 30)}</td></tr>`).join("") || `<tr><td colspan="${sizes.length + 2}" class="muted">Nothing matches.</td></tr>`}</tbody>
+      ${rows.length > 1 ? `<tfoot><tr><td>All shown</td>${sizes.map((x) => cell(total, x, true)).join("")}<td class="r num">${n1(total.rate * 30)}</td></tr></tfoot>` : ""}</table></div>
+      <p class="small muted" style="padding:10px 16px">In “In-stock mix %”, the line under a size shows its raw sales share when the two differ by 2 points or more. <span style="color:var(--bad)">▲</span> means stock-outs hid real demand for that size. * = fewer than 30 in-stock days, so treat it with care. Hover a cell for the details.</p></section>`;
   }
 
   function matrixTable(rows, dim, label, sizes, valueOf) {
@@ -827,7 +868,7 @@ Sea  ${String(n0(g.sea)).padEnd(6)} lands ~${fmt(c.asOf + L.sea)}` : "";
 
   // ================= events =================
   document.querySelector("nav.tabs").addEventListener("click", (e) => { const b = e.target.closest("button[data-tab]"); if (!b) return; S.tab = b.dataset.tab; S.confirm = null; try { localStorage.setItem("kondura-tab3", S.tab); } catch (er) {} render(); });
-  app.addEventListener("input", (e) => { if (e.target.id === "r-q") { S.rf.q = e.target.value; const p = e.target.selectionStart; render(); const f = document.getElementById("r-q"); f.focus(); try { f.setSelectionRange(p, p); } catch (er) {} } });
+  app.addEventListener("input", (e) => { if (e.target.id === "z-q") { S.zf.q = e.target.value; const p = e.target.selectionStart; render(); const f = document.getElementById("z-q"); f.focus(); try { f.setSelectionRange(p, p); } catch (er) {} return; } if (e.target.id === "r-q") { S.rf.q = e.target.value; const p = e.target.selectionStart; render(); const f = document.getElementById("r-q"); f.focus(); try { f.setSelectionRange(p, p); } catch (er) {} } });
   app.addEventListener("change", async (e) => {
     const t = e.target;
     if (t.id === "file" && t.files[0]) return readFile(t.files[0]);
@@ -852,6 +893,8 @@ Sea  ${String(n0(g.sea)).padEnd(6)} lands ~${fmt(c.asOf + L.sea)}` : "";
     if (e.target.closest("[data-stop]")) return;
     const gt = e.target.closest("[data-goto]"); if (gt) { S.tab = gt.dataset.goto; render(); return; }
     const tg = e.target.closest("tr[data-toggle]"); if (tg) { const k = tg.dataset.toggle; S.collapsed.has(k) ? S.collapsed.delete(k) : S.collapsed.add(k); saveCollapsed(); render(); return; }
+    const zb = e.target.closest("[data-zby]"); if (zb) { S.zf.by = zb.dataset.zby; render(); return; }
+    const zm = e.target.closest("[data-zmode]"); if (zm) { S.zf.mode = zm.dataset.zmode; render(); return; }
     const rs = e.target.closest("[data-rstatus]"); if (rs) { S.rf.status = rs.dataset.rstatus; render(); return; }
     const tr = e.target.closest("tr[data-detail]"); if (tr) { S.detail = tr.dataset.detail; renderDetail(); return; }
     const a = e.target.closest("[data-act]"); if (!a) return;
