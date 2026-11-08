@@ -127,7 +127,7 @@ input.inline { width: 72px; padding: 3px 6px; text-align: right; font-family: va
       <button role="tab" data-tab="restock" aria-selected="true">Restock plan</button>
       <button role="tab" data-tab="sales" aria-selected="false">Sales</button>
       <button role="tab" data-tab="outs" aria-selected="false">Stock-outs</button>
-      <button role="tab" data-tab="upload" aria-selected="false">Upload stock movement</button>
+      <button role="tab" data-tab="upload" aria-selected="false">Upload files</button>
       <button role="tab" data-tab="settings" aria-selected="false">Lead times &amp; settings</button>
     </nav>
   </div>
@@ -144,6 +144,9 @@ input.inline { width: 72px; padding: 3px 6px; text-align: right; font-family: va
     rf: { q: "", status: "all" }, sf: { range: "all", loc: "all", item: "all", group: "month" }, of: { item: "" }, detail: null, confirm: null, busy: null, offline: false };
   const app = document.getElementById("app");
   try { const t = localStorage.getItem("kondura-tab3"); if (t) S.tab = t; } catch (e) {}
+  S.upcoming = null; S.upImp = null; S.collapsed = new Set(); S.collapseInit = false;
+  try { const c = localStorage.getItem("kondura-collapsed"); if (c) { S.collapsed = new Set(JSON.parse(c)); S.collapseInit = true; } } catch (e) {}
+  const saveCollapsed = () => { S.collapseInit = true; try { localStorage.setItem("kondura-collapsed", JSON.stringify([...S.collapsed])); } catch (e) {} };
 
   // ================= helpers =================
   const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -160,6 +163,8 @@ input.inline { width: 72px; padding: 3px 6px; text-align: right; font-family: va
   const roundUp = (x, k) => (x <= 0 ? 0 : k > 1 ? Math.ceil(x / k) * k : Math.ceil(x));
   const sizeSort = (a, b) => { const na = parseFloat(a), nb = parseFloat(b); const o = ["XXS", "XS", "S", "M", "L", "XL", "XXL", "XXXL"]; if (!isNaN(na) && !isNaN(nb)) return na - nb; const ia = o.indexOf(String(a).toUpperCase()), ib = o.indexOf(String(b).toUpperCase()); if (ia >= 0 && ib >= 0) return ia - ib; return String(a).localeCompare(String(b), undefined, { numeric: true }); };
   const hashId = (s) => { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return "k" + (h >>> 0).toString(36) + s.length.toString(36); };
+  const cleanName = (x) => String(x ?? "").replace(/[\u200B-\u200F\u2060\uFEFF\u00A0]/g, " ").replace(/\s+/g, " ").trim();
+  const normName = (x) => cleanName(x).toLowerCase();
   const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   let toastT;
   function toast(msg) { let el = document.querySelector(".toast"); if (!el) { el = document.createElement("div"); el.className = "toast"; el.setAttribute("role", "status"); document.body.appendChild(el); } el.textContent = msg; el.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => (el.hidden = true), 3400); }
@@ -187,6 +192,23 @@ input.inline { width: 72px; padding: 3px 6px; text-align: right; font-family: va
     const H = L.sea + st.coverDays;
     const season = (st.season && st.season.length === 12 ? st.season : DEF.season).map((x) => (num(x) ?? 1));
     const plans = [];
+    // upcoming stock from the Odoo product export: forecasted − on hand per product (or per size)
+    const upc = new Map();
+    if (S.upcoming?.rows?.length) {
+      const idx = new Map();
+      for (const u of S.upcoming.rows) { const k = normName(u.item); let f = idx.get(k); if (!f) { f = { sized: new Map(), total: 0, any: false }; idx.set(k, f); } if (u.size) f.sized.set(String(u.size), (f.sized.get(String(u.size)) || 0) + u.qty); else { f.total += u.qty; f.any = true; } }
+      const netBy = new Map(); for (const r of rows) if (r.k === "S" || r.k === "R") { const k = r.item + "\u0001" + r.size; netBy.set(k, (netBy.get(k) || 0) - r.delta); }
+      const itemSizes = new Map(); for (const g of groups.values()) { if (!itemSizes.has(g.item)) itemSizes.set(g.item, []); itemSizes.get(g.item).push(g.size); }
+      for (const [item, sz] of itemSizes) {
+        const f = idx.get(normName(item)); if (!f) continue;
+        if (f.sized.size) { for (const z of sz) upc.set(item + "\u0001" + z, { qty: f.sized.get(z) || 0, src: "file" }); continue; }
+        if (!f.any) continue;
+        const w = sz.map((z) => Math.max(0, netBy.get(item + "\u0001" + z) || 0)); let W = w.reduce((a, x) => a + x, 0); if (!W) { w.fill(1); W = w.length; }
+        const sign = f.total < 0 ? -1 : 1, T = Math.abs(f.total); const raw = w.map((x) => (T * x) / W); const base = raw.map(Math.floor); let left = T - base.reduce((a, x) => a + x, 0);
+        raw.map((x, i) => [x - base[i], i]).sort((a, b) => b[0] - a[0]).forEach(([, i]) => { if (left > 0) { base[i]++; left--; } });
+        sz.forEach((z, i) => upc.set(item + "\u0001" + z, { qty: sign * base[i], src: "split", itemTotal: f.total }));
+      }
+    }
     for (const g of groups.values()) {
       g.rows.sort((a, b) => a.d - b.d || a.i - b.i);
       const d0 = g.rows[0].d, n = asOf - d0 + 1;
@@ -227,7 +249,10 @@ input.inline { width: 72px; padding: 3px 6px; text-align: right; font-family: va
       g.onHand = g.locs.filter((l) => l.sellable).reduce((a, l) => a + l.onHand, 0);
       g.onHandOther = g.locs.filter((l) => !l.sellable).reduce((a, l) => a + l.onHand, 0);
       g.network = network; g.d0 = d0; g.sold = sold; g.ret = ret;
-      g.incoming = num(S.incoming[hashId(g.key)]?.qty) || 0;
+      const man = S.incoming[hashId(g.key)], fileU = upc.get(g.key);
+      g.fileIncoming = fileU ? fileU.qty : null; g.fileSrc = fileU ? fileU.src : null;
+      if (man && man.qty !== null && man.qty !== undefined && man.qty !== "") { g.incoming = num(man.qty) || 0; g.incSrc = "manual"; }
+      else { g.incoming = fileU ? fileU.qty : 0; g.incSrc = fileU ? fileU.src : null; }
       // forward demand with seasonality
       const cum = new Float64Array(H + 1);
       for (let k = 1; k <= H; k++) cum[k] = cum[k - 1] + g.rate * season[monthOf(asOf + k)];
@@ -236,7 +261,7 @@ input.inline { width: 72px; padding: 3px 6px; text-align: right; font-family: va
       g.seasonSum = cum[H] / (g.rate || 1) / 30;
       g.need = cum[H] * (1 + st.buffer / 100);
       g.exact = Math.max(0, g.need - avail);
-      g.total = roundUp(g.exact, st.roundTo);
+      g.total = g.exact < 0.5 ? 0 : roundUp(g.exact, st.roundTo);
       let cover = H + 1; for (let k = 1; k <= H; k++) if (cum[k] > avail) { cover = k - 1; break; }
       g.cover = g.rate > 0 ? cover : null; g.coverCapped = cover > H;
       const bridge = Math.max(0, cum[L.sea] - avail);
@@ -282,6 +307,8 @@ input.inline { width: 72px; padding: 3px 6px; text-align: right; font-family: va
     }
     return out;
   }
+  function decodeUpcoming(x) { if (!x) return null; const rows = String(x.r || "").split(";").filter(Boolean).map((l) => { const p = l.split("|"); return { item: p[0], size: p[1] || null, qty: +p[2], onHand: +p[3], forecast: +p[4] }; }); return { name: x.name, at: x.at, rows }; }
+  const encodeUpcoming = (rows) => rows.map((u) => [u.item, u.size || "", u.qty, u.onHand, u.forecast].map((v) => String(v).replace(/[|;]/g, "/")).join("|")).join(";");
   async function boot() {
     render();
     let db = null;
@@ -298,6 +325,7 @@ input.inline { width: 72px; padding: 3px 6px; text-align: right; font-family: va
       if (!snap.metadata.fromCache) S.ready.c = true; done();
     }, () => { S.ready.c = true; done(); });
     db.collection("incoming").onSnapshot((snap) => { S.incoming = Object.fromEntries(snap.docs.map((d) => [d.id, d.data()])); S.calc = null; done(); }, () => {});
+    db.doc("config/upcoming").onSnapshot((d) => { S.upcoming = d.exists ? decodeUpcoming(d.data()) : null; S.calc = null; done(); }, () => {});
     db.doc("config/settings").onSnapshot((d) => { S.settings = { ...DEF, ...(d.exists ? d.data() : {}) }; S.calc = null; done(); }, () => {});
   }
   async function write(fn, okMsg) {
@@ -331,38 +359,60 @@ input.inline { width: 72px; padding: 3px 6px; text-align: right; font-family: va
   const pill = (s) => ({ urgent: `<span class="pill p-urgent">Urgent: air</span>`, now: `<span class="pill p-now">Order now</span>`, soon: `<span class="pill p-soon">Order soon</span>`, ok: `<span class="pill p-ok">Covered</span>`, none: `<span class="pill p-none">No sales</span>` }[s]);
   const splitBar = (a, s) => (a + s ? `<span class="split"><i style="width:${(100 * a) / (a + s)}%;background:var(--air)"></i><i style="width:${(100 * s) / (a + s)}%;background:var(--accent)"></i></span>` : "");
 
+  function incCell(g) {
+    const man = g.incSrc === "manual";
+    const ph = g.fileIncoming != null ? String(g.fileIncoming) : "0";
+    const note = man ? "typed" : g.incSrc === "split" ? "est. split" : g.incSrc === "file" ? "from Odoo" : "";
+    return `<input class="inline" type="number" step="1" id="inc-${esc(hashId(g.key))}" data-inc="${esc(g.key)}" value="${man ? esc(g.incoming) : ""}" placeholder="${esc(ph)}" aria-label="Upcoming for ${esc(g.item)} size ${esc(g.size)}">${g.incoming < 0 ? `<div class="small" style="color:var(--warn)">${n0(-g.incoming)} reserved</div>` : note ? `<div class="small muted">${note}</div>` : ""}`;
+  }
   function viewRestock() {
     const c = calc(); if (!c) return emptyState();
     const L = lt(), st = S.settings;
+    if (!S.collapseInit && c.items.length > 3) { c.items.forEach((it) => S.collapsed.add(it.item)); S.collapseInit = true; }
     const q = S.rf.q.trim().toLowerCase();
     const cnt = (s) => c.plans.filter((g) => g.status === s).length;
     const tot = (k) => c.items.reduce((a, it) => a + it[k], 0);
     let items = c.items;
     if (q) items = items.filter((it) => it.item.toLowerCase().includes(q));
     if (S.rf.status !== "all") items = items.filter((it) => (S.rf.status === "act" ? ["urgent", "now", "soon"].includes(it.status) : it.status === S.rf.status));
-    const filt = [["all", "All"], ["act", "Needs order"], ["urgent", "Urgent"], ["ok", "Covered"]].map(([k, l]) => `<button aria-pressed="${S.rf.status === k}" data-rstatus="${k}">${l}</button>`).join("");
+    const filt = [["all", "All"], ["act", "Needs order"], ["urgent", "Urgent"], ["ok", "Covered"]].map(([k, l]) => `<button type="button" aria-pressed="${S.rf.status === k}" data-rstatus="${k}">${l}</button>`).join("");
+    const reserved = c.plans.reduce((a, g) => a + Math.max(0, -g.incoming), 0), arriving = c.plans.reduce((a, g) => a + Math.max(0, g.incoming), 0);
+    const up = S.upcoming;
     const head = `
     <div class="lead">
       <div><span>Sea route</span><b>${L.sea} days</b><span>${st.productionDays} production + ${st.seaDays} shipping</span></div>
       <div><span>Air route (${st.airShare}% of each PO)</span><b class="air">${L.air} days</b><span>${st.productionDays} production + ${st.airDays} air</span></div>
-      <div><span>Data up to ${fmt(c.asOf)}</span><b>${c.H} days</b><span>horizon: until sea lands + ${st.coverDays} days cover</span></div>
+      <div><span>Moves up to ${fmt(c.asOf)}</span><b>${c.H} days</b><span>each PO covers until sea lands + ${st.coverDays} days</span></div>
     </div>
+    ${up ? "" : `<div class="banner"><span>Upcoming stock isn't loaded. Upload the Odoo product export (with Quantity On Hand and Forecasted Quantity) so orders already placed are counted.</span><button class="btn sm" data-goto="upload">Upload upcoming</button></div>`}
     <div class="summary">
       <div class="stat bad"><small>Sizes urgent (air)</small><b>${cnt("urgent")}</b><small>sell out before air can land</small></div>
       <div class="stat warn"><small>Sizes to order now / soon</small><b>${cnt("now") + cnt("soon")}</b><small>of ${c.plans.length} item sizes</small></div>
       <div class="stat"><small>Restock PO</small><b>${n0(tot("total"))}</b><small><span class="air">${n0(tot("air"))} air</span> · <span class="sea">${n0(tot("sea"))} sea</span></small></div>
-      <div class="stat"><small>On hand · incoming</small><b>${n0(tot("onHand"))}</b><small>+ ${n0(tot("incoming"))} already ordered</small></div>
+      <div class="stat"><small>On hand · upcoming</small><b>${n0(tot("onHand"))}</b><small>+ ${n0(arriving)} arriving${reserved ? ` · ${n0(reserved)} reserved` : ""}</small></div>
     </div>`;
-    const tools = `<div class="row"><div class="seg" role="group" aria-label="Status filter">${filt}</div><input id="r-q" type="search" placeholder="Search item" value="${esc(S.rf.q)}" style="width:190px"><button class="btn" data-act="export">Export PO</button></div>`;
-    const table = items.map((it) => `
-      <tr class="itemhead"><td colspan="15"><div class="row spread"><div class="row"><b style="font-size:15px">${esc(it.item)}</b>${pill(it.status)}</div><div class="row small"><span>PO <b class="num" style="font-size:15px">${n0(it.total)}</b></span><span class="air">air ${n0(it.air)}</span><span class="sea">sea ${n0(it.sea)}</span>${it.orderBy !== Infinity && isFinite(it.orderBy) ? `<span class="muted">latest sea order ${fmt(it.orderBy)}</span>` : ""}</div></div></td></tr>
-      ${it.sizes.map((g) => `<tr class="click" tabindex="0" data-detail="${esc(g.key)}">
-        <td><b>${esc(g.size)}</b></td>
+    const allCollapsed = items.length && items.every((it) => S.collapsed.has(it.item));
+    const tools = `<div class="row"><div class="seg" role="group" aria-label="Status filter">${filt}</div><input id="r-q" type="search" placeholder="Search item" value="${esc(S.rf.q)}" style="width:190px"><button class="btn" data-act="${allCollapsed ? "expand-all" : "collapse-all"}">${allCollapsed ? "Expand all" : "Collapse all"}</button><button class="btn" data-act="export">Export PO</button></div>`;
+    const statusWhy = (it) => { const n = (s) => it.sizes.filter((g) => g.status === s).length; const parts = []; if (n("urgent")) parts.push(`${n("urgent")} urgent`); if (n("now")) parts.push(`${n("now")} order now`); if (n("soon")) parts.push(`${n("soon")} soon`); if (n("ok")) parts.push(`${n("ok")} covered`); return parts.join(" · ") + (isFinite(it.orderBy) ? ` · latest sea order ${fmt(it.orderBy)}` : ""); };
+    const table = items.map((it) => {
+      const open = !S.collapsed.has(it.item);
+      const inc = it.sizes.reduce((a, g) => a + g.incoming, 0), low = Math.max(...it.sizes.map((g) => g.lowDays));
+      const cov = it.sizes.filter((g) => g.cover != null && g.rate >= 0.01); const minCov = cov.length ? Math.min(...cov.map((g) => (g.coverCapped ? Infinity : g.cover))) : null;
+      return `<tr class="itemhead click" tabindex="0" data-toggle="${esc(it.item)}" aria-expanded="${open}">
+        <td style="min-width:230px"><b>${open ? "▾" : "▸"} ${esc(it.item)}</b><div class="small muted">${it.sizes.length} sizes</div></td>
+        <td class="r num">${n0(it.received)}</td><td class="r num">${n0(it.net)}</td><td class="r num">${it.gross ? pct(it.returns / it.gross) : "—"}</td>
+        <td class="r num">${n0(it.onHand)}</td><td class="r num">${inc ? (inc > 0 ? "+" : "") + n0(inc) : "0"}${inc < 0 ? '<div class="small" style="color:var(--warn)">reserved</div>' : ""}</td>
+        <td class="r num">${low}</td><td class="r num">${n1(it.demandMo)}</td><td class="r num">${minCov == null ? "—" : minCov === Infinity ? c.H + "+" : n0(minCov)}</td>
+        <td class="r num">${n0(it.need)}</td><td class="r"><span class="qty">${n0(it.total)}</span></td>
+        <td class="r num" style="white-space:nowrap"><span class="air">${n0(it.air)}</span> / <span class="sea">${n0(it.sea)}</span><div>${splitBar(it.air, it.sea)}</div></td>
+        <td class="r num muted">${it.total ? "100%" : "—"}</td><td>${pill(it.status)}</td><td><div class="why">${esc(statusWhy(it))}</div></td></tr>
+      ${open ? it.sizes.map((g) => `<tr class="click" tabindex="0" data-detail="${esc(g.key)}">
+        <td style="padding-left:30px"><b>${esc(g.size)}</b></td>
         <td class="r num">${n0(g.received)}</td>
         <td class="r num">${n0(g.net)}</td>
         <td class="r num">${g.gross ? pct(g.returns / g.gross) : "—"}</td>
         <td class="r num">${n0(g.onHand)}</td>
-        <td class="r" data-stop="1"><input class="inline" type="number" min="0" id="inc-${esc(hashId(g.key))}" data-inc="${esc(g.key)}" value="${g.incoming || ""}" placeholder="0" aria-label="Incoming for ${esc(g.item)} size ${esc(g.size)}"></td>
+        <td class="r" data-stop="1">${incCell(g)}</td>
         <td class="r num">${g.lowDays}</td>
         <td class="r num">${n1(g.demandMo)}</td>
         <td class="r num">${g.cover == null ? "—" : g.coverCapped ? c.H + "+" : n0(g.cover)}</td>
@@ -371,11 +421,12 @@ input.inline { width: 72px; padding: 3px 6px; text-align: right; font-family: va
         <td class="r num" style="white-space:nowrap"><span class="air">${n0(g.air)}</span> / <span class="sea">${n0(g.sea)}</span><div>${splitBar(g.air, g.sea)}</div></td>
         <td class="r num muted">${it.total ? Math.round((100 * g.total) / it.total) + "%" : "—"}</td>
         <td>${pill(g.status)}</td>
-        <td><div class="why">${esc(g.why)}</div></td></tr>`).join("")}`).join("");
-    return head + `<section class="panel"><div class="panel-head"><div class="stack"><h2>Restock by size</h2><p class="muted small">Demand counts only days the size had ≥ ${st.minStock} units across sellable locations. Need = demand × seasonality × (1 + ${st.buffer}% buffer) over ${c.H} days. Restock = need − on hand − incoming, rounded up to ${st.roundTo}.</p></div>${tools}</div>
-      <div class="tablebox"><table><thead><tr><th>Size</th><th class="r">Received</th><th class="r">Net sold</th><th class="r">Return %</th><th class="r">On hand</th><th class="r">Incoming</th><th class="r">Days low / out</th><th class="r">Demand / mo</th><th class="r">Days left</th><th class="r">Need</th><th class="r">Restock</th><th class="r">Air / Sea</th><th class="r">Share</th><th>Status</th><th>Why</th></tr></thead>
+        <td><div class="why">${esc(g.why)}</div></td></tr>`).join("") : ""}`;
+    }).join("");
+    return head + `<section class="panel"><div class="panel-head"><div class="stack"><h2>Restock by product and size</h2><p class="muted small">Demand counts only days the size had ≥ ${st.minStock} units across sellable locations. Need = demand × seasonality × (1 + ${st.buffer}% buffer) over ${c.H} days. Restock = need − on hand − upcoming, rounded up to ${st.roundTo}.</p></div>${tools}</div>
+      <div class="tablebox"><table><thead><tr><th>Product / size</th><th class="r">Received</th><th class="r">Net sold</th><th class="r">Return %</th><th class="r">On hand</th><th class="r">Upcoming</th><th class="r">Days low / out</th><th class="r">Demand / mo</th><th class="r">Days left</th><th class="r">Need</th><th class="r">Restock</th><th class="r">Air / Sea</th><th class="r">Share</th><th>Status</th><th>Why</th></tr></thead>
       <tbody>${table || `<tr><td colspan="15" class="muted">Nothing matches this filter.</td></tr>`}</tbody></table></div>
-      <p class="small muted" style="padding:10px 16px">Type quantities already ordered (not yet received) in “Incoming”. Click a size for the shop-by-shop breakdown and the calculation.</p></section>`;
+      <p class="small muted" style="padding:10px 16px">Click a product to show or hide its sizes; click a size for the shop breakdown. Upcoming = Odoo forecasted − on hand: positive is stock arriving, negative is reserved for customer orders not yet picked up or delivered. Type a number to override a size; clear it to go back to the Odoo figure.</p></section>`;
   }
 
   function matrixTable(rows, dim, label, sizes, valueOf) {
@@ -466,15 +517,18 @@ input.inline { width: 72px; padding: 3px 6px; text-align: right; font-family: va
 
   function viewUpload() {
     let h = "";
-    if (S.imp) h += viewMapping();
+    if (S.upImp) h += viewUpcomingImport();
+    else if (S.imp) h += viewMapping();
     else h += `<section class="panel"><div class="panel-head"><div class="stack"><h2>Upload stock movement</h2><p class="muted small">Odoo moves history export (Date, Product, From, To, Quantity, Status) or any sheet with a date, item, size, quantity and location. Excel or CSV.</p></div></div>
       <div class="panel-body"><div class="drop" id="drop">
         <strong>Drop the Excel file here</strong><p class="muted small">or choose it from your computer</p>
         <input type="file" id="file" accept=".xlsx,.xls,.csv,.tsv,.txt" style="max-width:280px">
-        <p class="muted small">You can upload one product or all products at once. Sizes in brackets, like “Cloud Walk - Khaki (42)”, are read automatically.</p>
+        <p class="muted small">Two kinds of file: <b>stock moves</b> (moves history) for sales and stock-outs, and the <b>product export</b> with Quantity On Hand and Forecasted Quantity for upcoming stock. The app recognises which one you dropped.</p>
       </div>${!S.rows.length && !S.sample ? `<div class="row"><button class="btn" data-act="sample">Try with sample data first</button></div>` : ""}</div></section>`;
     const ups = S.uploads.slice().sort((a, b) => (b.at || "").localeCompare(a.at || ""));
-    h += `<section class="panel"><div class="panel-head"><h2>Uploaded files</h2><span class="muted small">${n0(ups.reduce((a, u) => a + (u.rows || 0), 0))} stock movements saved</span></div>
+    const up = S.upcoming;
+    h += `<section class="panel"><div class="panel-head"><h2>Upcoming stock file</h2></div>${up ? `<div class="tablebox"><table><thead><tr><th>File</th><th class="r">Arriving</th><th class="r">Reserved</th><th>Uploaded</th><th></th></tr></thead><tbody><tr><td>${esc(up.name)}</td><td class="r num">${n0(up.rows.reduce((a, r) => a + Math.max(0, r.qty), 0))}</td><td class="r num">${n0(up.rows.reduce((a, r) => a + Math.max(0, -r.qty), 0))}</td><td class="num">${up.at ? new Date(up.at).toLocaleString() : "—"}</td><td>${S.confirm === "upc" ? `<span class="row" style="flex-wrap:nowrap"><button class="btn sm danger" data-act="del-upc">Remove</button><button class="btn sm" data-act="cancel">Keep</button></span>` : `<button class="btn sm" data-act="ask" data-id="upc">Remove</button>`}</td></tr></tbody></table></div>` : `<div class="empty">Not uploaded yet. Drop the Odoo product export (Quantity On Hand + Forecasted Quantity) above.</div>`}</section>`;
+    h += `<section class="panel"><div class="panel-head"><h2>Stock move files</h2><span class="muted small">${n0(ups.reduce((a, u) => a + (u.rows || 0), 0))} stock movements saved</span></div>
       ${ups.length ? `<div class="tablebox"><table><thead><tr><th>File</th><th class="r">Movements</th><th>Covers</th><th>Uploaded</th><th></th></tr></thead><tbody>
       ${ups.map((u) => `<tr><td>${esc(u.name)}</td><td class="r num">${n0(u.rows)}</td><td class="num">${fmt(u.from)} – ${fmt(u.to)}</td><td class="num">${u.at ? new Date(u.at).toLocaleString() : "—"}</td><td>${S.confirm === u.id ? `<span class="row" style="flex-wrap:nowrap"><button class="btn sm danger" data-act="del-up" data-id="${esc(u.id)}">Delete</button><button class="btn sm" data-act="cancel">Keep</button></span>` : `<button class="btn sm" data-act="ask" data-id="${esc(u.id)}">Delete</button>`}</td></tr>`).join("")}
       </tbody></table></div>` : `<div class="empty">No files uploaded yet.</div>`}</section>`;
@@ -550,7 +604,7 @@ Net sold on those days    ${n0(g.soldInStock)}
 Demand                    ${n1(g.demandMo)} / month
 Seasonal months ahead     ${g.seasonSum.toFixed(2)}  (${c.H} days)
 Need                      ${n1(g.demandMo)} × ${g.seasonSum.toFixed(2)} × ${(1 + st.buffer / 100).toFixed(2)} = ${n0(g.need)}
-Restock                   ${n0(g.need)} − ${n0(g.onHand)} on hand − ${n0(g.incoming)} incoming = ${n0(g.exact)} → ${n0(g.total)}
+Restock                   ${n0(g.need)} − ${n0(g.onHand)} on hand ${g.incoming < 0 ? "+ " + n0(-g.incoming) + " reserved" : "− " + n0(g.incoming) + " upcoming"} = ${n0(g.exact)} → ${n0(g.total)}${g.incSrc === "split" ? "\nUpcoming split by size mix (Odoo export has no sizes)" : ""}
 Air  ${String(n0(g.air)).padEnd(6)} lands ~${fmt(c.asOf + L.air)}
 Sea  ${String(n0(g.sea)).padEnd(6)} lands ~${fmt(c.asOf + L.sea)}` : "";
     // network sparkline
@@ -599,9 +653,45 @@ Sea  ${String(n0(g.sea)).padEnd(6)} lands ~${fmt(c.asOf + L.sea)}` : "";
       const wb = XLSX.read(await file.arrayBuffer(), { type: "array", cellDates: true });
       let best = wb.SheetNames[0], bs = -1;
       for (const n of wb.SheetNames) { const rows = XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: true, defval: "" }); let sc = 0; for (let i = 0; i < Math.min(25, rows.length); i++) sc = Math.max(sc, headerScore(rows[i])); sc += Math.min(1, rows.length / 2000); if (sc > bs) { bs = sc; best = n; } }
+      for (const n of wb.SheetNames) { const rows = XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: true, defval: "" }); for (let i = 0; i < Math.min(10, rows.length); i++) { const h = rows[i].map((x) => String(x).trim()); const fc = h.findIndex((x) => /forecast|متوقع/i.test(x)), oh = h.findIndex((x) => /on.?hand|المتوفر|الكمية الحالية/i.test(x)); if (fc >= 0 && oh >= 0 && fc !== oh && h.filter(Boolean).length >= 3 && h[fc].length < 40 && h[oh].length < 40) { parseUpcoming(file.name, h, rows.slice(i + 1), fc, oh); S.imp = null; render(); return; } } }
       S.wb = wb; S.imp = { name: file.name, sheets: wb.SheetNames, sheet: best, mode: "replace", dmy: true, types: {} };
       loadSheet(); render();
     } catch (e) { toast("Couldn't read that file. Save it as .xlsx or .csv and try again."); }
+  }
+  function parseUpcoming(name, h, data, fc, oh) {
+    let ni = h.findIndex((x) => /^name$|^الاسم$|^اسم/i.test(x)); if (ni < 0) ni = h.findIndex((x) => /product|name|منتج|اسم/i.test(x));
+    const si = h.findIndex((x) => /^size$|variant values|attribute values|مقاس/i.test(x));
+    const rows = [];
+    for (const r of data) {
+      const raw = r[ni]; if (!String(raw ?? "").trim()) continue;
+      const onHand = num(r[oh]) || 0, forecast = num(r[fc]) || 0;
+      let sizeVal = si >= 0 ? String(r[si] ?? "") : ""; const sm = sizeVal.match(/(?:size|مقاس)\s*:\s*([^,]+)/i); if (sm) sizeVal = sm[1]; else if (sizeVal.includes(":")) sizeVal = "";
+      const pp = parseProduct(raw, sizeVal);
+      rows.push({ item: pp.item, size: pp.size === "One size" && !sizeVal && !/\([^()]{1,12}\)\s*$/.test(cleanName(raw)) ? null : pp.size, qty: forecast - onHand, onHand, forecast });
+    }
+    S.upImp = { name, rows }; S.tab = "upload";
+  }
+  async function saveUpcoming() {
+    const u = S.upImp; if (!u) return;
+    const body = { name: u.name, at: new Date().toISOString(), r: encodeUpcoming(u.rows) };
+    if (!S.db || S.sample) { S.upcoming = decodeUpcoming(body); S.upImp = null; S.calc = null; S.tab = "restock"; render(); toast("Upcoming stock applied" + (S.db ? "" : " (not saved in this view)") + "."); return; }
+    if (await write((db) => db.doc("config/upcoming").set(body), "Upcoming stock saved")) { S.upcoming = decodeUpcoming(body); S.upImp = null; S.calc = null; S.tab = "restock"; render(); }
+  }
+  function viewUpcomingImport() {
+    const u = S.upImp; const known = new Set(S.rows.map((r) => normName(r.item)));
+    const nz = u.rows.filter((r) => r.qty !== 0).sort((a, b) => b.qty - a.qty);
+    const arriving = u.rows.reduce((a, r) => a + Math.max(0, r.qty), 0), reserved = u.rows.reduce((a, r) => a + Math.max(0, -r.qty), 0);
+    const sized = u.rows.some((r) => r.size);
+    const matched = new Set(u.rows.filter((r) => known.has(normName(r.item))).map((r) => normName(r.item))).size;
+    return `<section class="panel"><div class="panel-head"><div class="stack"><h2>Upcoming stock</h2><p class="muted small">${esc(u.name)} · ${n0(u.rows.length)} ${sized ? "product sizes" : "products"} · upcoming = forecasted − on hand</p></div><button class="btn" data-act="cancel-up">Cancel</button></div>
+      <div class="panel-body">
+        <div class="summary"><div class="stat good"><small>Arriving</small><b>${n0(arriving)}</b><small>forecasted above on hand</small></div><div class="stat warn"><small>Reserved</small><b>${n0(reserved)}</b><small>customer orders not picked up / delivered</small></div><div class="stat"><small>Products with a difference</small><b>${n0(nz.length)}</b><small>of ${n0(u.rows.length)}</small></div><div class="stat"><small>Match your stock moves</small><b>${n0(matched)}</b><small>${known.size ? "of " + n0(known.size) + " products uploaded" : "upload stock moves too"}</small></div></div>
+        ${sized ? "" : `<p class="small muted">This export has no sizes, so each product's upcoming quantity is split across sizes by its sales size mix. For exact sizes, export Product Variants instead (names like “Cloud Walk - Khaki (42)”). You can also type exact numbers per size on the Restock tab.</p>`}
+        <div class="tablebox" style="max-height:420px;overflow-y:auto"><table><thead><tr><th>Product</th>${sized ? "<th>Size</th>" : ""}<th class="r">On hand</th><th class="r">Forecasted</th><th class="r">Upcoming</th><th>In your stock moves</th></tr></thead><tbody>
+          ${nz.map((r) => `<tr><td>${esc(r.item)}</td>${sized ? `<td>${esc(r.size || "—")}</td>` : ""}<td class="r num">${n0(r.onHand)}</td><td class="r num">${n0(r.forecast)}</td><td class="r num" style="color:${r.qty < 0 ? "var(--warn)" : "var(--good)"}">${r.qty > 0 ? "+" : ""}${n0(r.qty)}${r.qty < 0 ? " reserved" : ""}</td><td class="small">${known.has(normName(r.item)) ? "Yes" : '<span class="muted">Not uploaded yet</span>'}</td></tr>`).join("") || `<tr><td colspan="6" class="muted">Forecasted equals on hand for every product: nothing upcoming.</td></tr>`}
+        </tbody></table></div>
+        <div class="row"><button class="btn primary" data-act="save-up">Save upcoming stock</button><span class="small muted">Replaces the previous upcoming file. Sizes you typed by hand on the Restock tab are kept.</span></div>
+      </div></section>`;
   }
   function loadSheet() {
     const m = S.imp; const all = XLSX.utils.sheet_to_json(S.wb.Sheets[m.sheet], { header: 1, raw: true, defval: "" });
@@ -624,7 +714,7 @@ Sea  ${String(n0(g.sea)).padEnd(6)} lands ~${fmt(c.asOf + L.sea)}` : "";
     return null;
   }
   function parseProduct(raw, sizeCol) {
-    let s = String(raw ?? "").trim().replace(/^\[[^\]]*\]\s*/, "");
+    let s = cleanName(raw).replace(/^\[[^\]]*\]\s*/, "");
     let size = String(sizeCol ?? "").trim();
     const m = s.match(/\s*\(([^()]{1,12})\)\s*$/);
     if (m) { if (!size) size = m[1].trim(); s = s.slice(0, m.index).trim(); }
@@ -730,9 +820,10 @@ Sea  ${String(n0(g.sea)).padEnd(6)} lands ~${fmt(c.asOf + L.sea)}` : "";
     if (t.id === "s-range") { S.sf.range = t.value; render(); } else if (t.id === "s-loc") { S.sf.loc = t.value; render(); } else if (t.id === "s-item") { S.sf.item = t.value; render(); } else if (t.id === "s-group") { S.sf.group = t.value; render(); }
     else if (t.id === "o-item") { S.of.item = t.value; render(); }
     else if (t.dataset.inc != null) {
-      const key = t.dataset.inc, [item, size] = key.split("\u0001"), v = num(t.value) || 0, id = hashId(key);
-      if (S.sample || !S.db) { S.incoming[id] = { item, size, qty: v }; S.calc = null; render(); return; }
-      await write((db) => db.doc("incoming/" + id).set({ item, size, qty: v }), "Incoming saved");
+      const key = t.dataset.inc, [item, size] = key.split("\u0001"), id = hashId(key), clear = t.value.trim() === "", v = num(t.value) || 0;
+      if (S.sample || !S.db) { if (clear) delete S.incoming[id]; else S.incoming[id] = { item, size, qty: v }; S.calc = null; render(); return; }
+      if (clear) { if (S.incoming[id]) await write((db) => db.doc("incoming/" + id).delete(), "Back to the Odoo figure"); }
+      else await write((db) => db.doc("incoming/" + id).set({ item, size, qty: v }), "Upcoming saved");
     }
     else if (t.dataset.map) { S.imp.map[t.dataset.map] = t.value === "" ? "" : Number(t.value); if (t.dataset.map === "type") S.imp.types = {}; render(); }
     else if (t.dataset.kind != null) S.imp.types[t.dataset.kind] = t.value;
@@ -741,11 +832,12 @@ Sea  ${String(n0(g.sea)).padEnd(6)} lands ~${fmt(c.asOf + L.sea)}` : "";
     else if (t.id === "map-format") { S.imp.format = t.value; render(); }
     else if (t.id === "map-sheet") { S.imp.sheet = t.value; loadSheet(); render(); }
   });
-  app.addEventListener("keydown", (e) => { const tr = e.target.closest("tr[data-detail]"); if (tr && e.target === tr && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); S.detail = tr.dataset.detail; renderDetail(); } });
+  app.addEventListener("keydown", (e) => { const tg = e.target.closest("tr[data-toggle]"); if (tg && e.target === tg && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); tg.click(); return; } const tr = e.target.closest("tr[data-detail]"); if (tr && e.target === tr && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); S.detail = tr.dataset.detail; renderDetail(); } });
   document.addEventListener("keydown", (e) => { if (e.key === "Escape" && S.detail) { S.detail = null; document.querySelector(".drawer-back")?.remove(); } });
   app.addEventListener("click", async (e) => {
     if (e.target.closest("[data-stop]")) return;
     const gt = e.target.closest("[data-goto]"); if (gt) { S.tab = gt.dataset.goto; render(); return; }
+    const tg = e.target.closest("tr[data-toggle]"); if (tg) { const k = tg.dataset.toggle; S.collapsed.has(k) ? S.collapsed.delete(k) : S.collapsed.add(k); saveCollapsed(); render(); return; }
     const rs = e.target.closest("[data-rstatus]"); if (rs) { S.rf.status = rs.dataset.rstatus; render(); return; }
     const tr = e.target.closest("tr[data-detail]"); if (tr) { S.detail = tr.dataset.detail; renderDetail(); return; }
     const a = e.target.closest("[data-act]"); if (!a) return;
@@ -753,6 +845,11 @@ Sea  ${String(n0(g.sea)).padEnd(6)} lands ~${fmt(c.asOf + L.sea)}` : "";
     if (act === "sample") { S.rows = makeSample(); S.sample = true; S.calc = null; S.tab = "restock"; render(); }
     else if (act === "exit-sample") { S.sample = false; S.rows = decodeChunks(); S.calc = null; render(); }
     else if (act === "export") exportPlan();
+    else if (act === "collapse-all") { (calc()?.items || []).forEach((it) => S.collapsed.add(it.item)); saveCollapsed(); render(); }
+    else if (act === "expand-all") { S.collapsed.clear(); saveCollapsed(); render(); }
+    else if (act === "cancel-up") { S.upImp = null; render(); }
+    else if (act === "save-up") saveUpcoming();
+    else if (act === "del-upc") { S.confirm = null; if (!S.db || S.sample) { S.upcoming = null; S.calc = null; render(); } else await write((db) => db.doc("config/upcoming").delete(), "Upcoming stock removed"); }
     else if (act === "cancel-imp") { S.imp = null; render(); }
     else if (act === "save-imp") saveImport();
     else if (act === "ask") { S.confirm = id; render(); }
