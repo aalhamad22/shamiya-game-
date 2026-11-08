@@ -297,9 +297,16 @@ input.inline { width: 72px; padding: 3px 6px; text-align: right; font-family: va
   const calc = () => (S.calc ??= compute());
 
   // ================= data layer =================
+  const upSig = (u) => [u.name, u.rows, u.from, u.to].join("|");
+  function duplicateUploadIds() {
+    const keep = new Map(), dup = new Set();
+    for (const u of S.uploads.slice().sort((a, b) => (b.at || "").localeCompare(a.at || ""))) { const k = upSig(u); if (keep.has(k)) dup.add(u.id); else keep.set(k, u.id); }
+    return dup;
+  }
   function decodeChunks() {
-    const out = []; let i = 0;
+    const out = []; let i = 0; const dup = duplicateUploadIds();
     for (const c of S.chunkDocs) {
+      if (dup.has(c.uploadId)) continue; // same file saved twice: count it once
       const Lc = c.locs || [], I = c.items || [], Z = c.sizes || [];
       for (const line of String(c.r || "").split(";")) {
         if (!line) continue; const p = line.split("|");
@@ -318,7 +325,7 @@ input.inline { width: 72px; padding: 3px 6px; text-align: right; font-family: va
     S.db = db;
     const timer = setTimeout(() => { if (!(S.ready.u && S.ready.c)) { S.slow = true; render(); } }, 10000);
     const done = () => { if (S.ready.u && S.ready.c) { clearTimeout(timer); S.slow = false; } render(); };
-    db.collection("uploads").onSnapshot((snap) => { S.uploads = snap.docs.map((d) => ({ id: d.id, ...d.data() })); if (!snap.metadata.fromCache) S.ready.u = true; done(); }, () => { S.ready.u = true; done(); });
+    db.collection("uploads").onSnapshot((snap) => { S.uploads = snap.docs.map((d) => ({ id: d.id, ...d.data() })); if (!S.sample && !S.busy && S.chunkDocs.length) { S.rows = decodeChunks(); S.calc = null; } if (!snap.metadata.fromCache) S.ready.u = true; done(); }, () => { S.ready.u = true; done(); });
     db.collection("chunks").onSnapshot((snap) => {
       if (S.busy) return;
       S.chunkDocs = snap.docs.map((d) => ({ id: d.id, ...d.data() })).sort((a, b) => a.id.localeCompare(b.id));
@@ -526,12 +533,12 @@ input.inline { width: 72px; padding: 3px 6px; text-align: right; font-family: va
         <input type="file" id="file" accept=".xlsx,.xls,.csv,.tsv,.txt" style="max-width:280px">
         <p class="muted small">Two kinds of file: <b>stock moves</b> (moves history) for sales and stock-outs, and the <b>product export</b> with Quantity On Hand and Forecasted Quantity for upcoming stock. The app recognises which one you dropped.</p>
       </div>${!S.rows.length && !S.sample ? `<div class="row"><button class="btn" data-act="sample">Try with sample data first</button></div>` : ""}</div></section>`;
-    const ups = S.uploads.slice().sort((a, b) => (b.at || "").localeCompare(a.at || ""));
+    const ups = S.uploads.slice().sort((a, b) => (b.at || "").localeCompare(a.at || "")); const dupIds = duplicateUploadIds();
     const up = S.upcoming;
     h += `<section class="panel"><div class="panel-head"><h2>Upcoming stock file</h2></div>${up ? `<div class="tablebox"><table><thead><tr><th>File</th><th class="r">Arriving</th><th class="r">Reserved</th><th>Uploaded</th><th></th></tr></thead><tbody><tr><td>${esc(up.name)}</td><td class="r num">${n0(up.rows.reduce((a, r) => a + Math.max(0, r.qty), 0))}</td><td class="r num">${n0(up.rows.reduce((a, r) => a + Math.max(0, -r.qty), 0))}</td><td class="num">${up.at ? new Date(up.at).toLocaleString() : "—"}</td><td>${S.confirm === "upc" ? `<span class="row" style="flex-wrap:nowrap"><button class="btn sm danger" data-act="del-upc">Remove</button><button class="btn sm" data-act="cancel">Keep</button></span>` : `<button class="btn sm" data-act="ask" data-id="upc">Remove</button>`}</td></tr></tbody></table></div>` : `<div class="empty">Not uploaded yet. Drop the Odoo product export (Quantity On Hand + Forecasted Quantity) above.</div>`}</section>`;
-    h += `<section class="panel"><div class="panel-head"><h2>Stock move files</h2><span class="muted small">${n0(ups.reduce((a, u) => a + (u.rows || 0), 0))} stock movements saved</span></div>
+    h += `<section class="panel"><div class="panel-head"><h2>Stock move files</h2><span class="muted small">${n0(ups.filter((u) => !dupIds.has(u.id)).reduce((a, u) => a + (u.rows || 0), 0))} stock movements counted</span></div>
       ${ups.length ? `<div class="tablebox"><table><thead><tr><th>File</th><th class="r">Movements</th><th>Covers</th><th>Uploaded</th><th></th></tr></thead><tbody>
-      ${ups.map((u) => `<tr><td>${esc(u.name)}</td><td class="r num">${n0(u.rows)}</td><td class="num">${fmt(u.from)} – ${fmt(u.to)}</td><td class="num">${u.at ? new Date(u.at).toLocaleString() : "—"}</td><td>${S.confirm === u.id ? `<span class="row" style="flex-wrap:nowrap"><button class="btn sm danger" data-act="del-up" data-id="${esc(u.id)}">Delete</button><button class="btn sm" data-act="cancel">Keep</button></span>` : `<button class="btn sm" data-act="ask" data-id="${esc(u.id)}">Delete</button>`}</td></tr>`).join("")}
+      ${ups.map((u) => `<tr><td>${esc(u.name)}${dupIds.has(u.id) ? '<div class="small" style="color:var(--warn)">Duplicate of a newer upload. Not counted; delete it to tidy up.</div>' : ""}</td><td class="r num">${n0(u.rows)}</td><td class="num">${fmt(u.from)} – ${fmt(u.to)}</td><td class="num">${u.at ? new Date(u.at).toLocaleString() : "—"}</td><td>${S.confirm === u.id ? `<span class="row" style="flex-wrap:nowrap"><button class="btn sm danger" data-act="del-up" data-id="${esc(u.id)}">Delete</button><button class="btn sm" data-act="cancel">Keep</button></span>` : `<button class="btn sm" data-act="ask" data-id="${esc(u.id)}">Delete</button>`}</td></tr>`).join("")}
       </tbody></table></div>` : `<div class="empty">No files uploaded yet.</div>`}</section>`;
     return h;
   }
@@ -557,7 +564,7 @@ input.inline { width: 72px; padding: 3px 6px; text-align: right; font-family: va
       ${typeVals.length ? `<div class="stack"><h3>What each movement type means</h3><div class="tablebox"><table><thead><tr><th>Value in your file</th><th>Treat as</th></tr></thead><tbody>${typeVals.map((v) => `<tr><td>${esc(v)}</td><td><select data-kind="${esc(v)}" style="max-width:240px">${Object.entries(KINDS).map(([k, l]) => `<option value="${k}" ${m.types[v] === k ? "selected" : ""}>${l}</option>`).join("")}</select></td></tr>`).join("")}</tbody></table></div></div>` : ""}
       <div class="stack"><h3>Preview</h3><div class="tablebox"><table><thead><tr>${m.header.map((h) => `<th>${esc(h)}</th>`).join("")}</tr></thead><tbody>${preview.map((r) => `<tr>${m.header.map((_, i) => `<td class="small">${esc(r[i] instanceof Date ? r[i].toISOString().slice(0, 16).replace("T", " ") : r[i])}</td>`).join("")}</tr>`).join("")}</tbody></table></div></div>
       <div class="row"><label style="max-width:380px">This file<select id="map-mode"><option value="replace" ${m.mode === "replace" ? "selected" : ""}>Replaces all earlier uploads</option><option value="append" ${m.mode === "append" ? "selected" : ""}>Adds to earlier uploads (other products or a new period)</option></select></label>
-      <button class="btn primary" data-act="save-imp" ${ready ? "" : "disabled"}>Save and calculate</button>${ready ? "" : '<span class="small muted">Choose the required columns.</span>'}</div>
+      <button class="btn primary" data-act="save-imp" ${ready && !S.busy ? "" : "disabled"}>Save and calculate</button>${ready ? "" : '<span class="small muted">Choose the required columns.</span>'}</div>
     </div></section>`;
     setTimeout(() => { for (const [k, v] of Object.entries(m.map)) { const el = document.getElementById("map-" + k); if (el) el.value = v ?? ""; } }, 0);
     return html;
@@ -746,6 +753,7 @@ Sea  ${String(n0(g.sea)).padEnd(6)} lands ~${fmt(c.asOf + L.sea)}` : "";
     return { out, skipped };
   }
   async function saveImport() {
+    if (S.busy) return; // already saving: ignore a second click
     const m = S.imp; const { out, skipped } = normalise(m);
     if (!out.length) { toast("No usable rows. Check the date, product and quantity columns."); return; }
     if (!S.db) { S.rows = out.map((r, i) => ({ ...r, i })); S.sample = false; S.calc = null; S.imp = null; S.tab = "restock"; render(); toast(`Loaded ${n0(out.length)} movements (not saved in this view).`); return; }
@@ -753,7 +761,12 @@ Sea  ${String(n0(g.sea)).padEnd(6)} lands ~${fmt(c.asOf + L.sea)}` : "";
     let from = Infinity, to = -Infinity; for (const r of out) { if (r.d < from) from = r.d; if (r.d > to) to = r.d; }
     S.busy = "Saving upload…"; render();
     const ok = await write(async (db) => {
-      if (m.mode === "replace") { for (const c of S.chunkDocs) await db.doc("chunks/" + c.id).delete(); for (const u of S.uploads) await db.doc("uploads/" + u.id).delete(); }
+      const [chSnap, upSnap] = await Promise.all([db.collection("chunks").get(), db.collection("uploads").get()]);
+      const chunks = chSnap.docs.map((d) => ({ id: d.id, uploadId: d.data().uploadId })), ups = upSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      const sig = [m.name, out.length, from, to].join("|");
+      const drop = m.mode === "replace" ? ups.map((u) => u.id) : ups.filter((u) => upSig(u) === sig).map((u) => u.id); // re-uploading the same file replaces it
+      for (const c of chunks) if (drop.includes(c.uploadId)) await db.doc("chunks/" + c.id).delete();
+      for (const uid of drop) await db.doc("uploads/" + uid).delete();
       const PER = 3000; let part = 0;
       for (let i = 0; i < out.length; i += PER) {
         const slice = out.slice(i, i + PER); const Lc = [], I = [], Z = []; const ix = (arr, v) => { let j = arr.indexOf(v); if (j < 0) { j = arr.length; arr.push(v); } return j; };
