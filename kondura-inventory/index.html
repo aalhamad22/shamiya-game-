@@ -337,6 +337,7 @@ input.inline { width: 72px; padding: 3px 6px; text-align: right; font-family: va
     render();
     let db = null;
     try { db = window.claude?.use ? await window.claude.use("db") : null; } catch (e) {}
+    if (!db && window.__localDB) db = window.__localDB;
     if (!db) { S.offline = true; S.ready = { u: true, c: true }; render(); return; }
     S.db = db;
     const timer = setTimeout(() => { if (!(S.ready.u && S.ready.c)) { S.slow = true; render(); } }, 10000);
@@ -916,6 +917,7 @@ Sea  ${String(n0(g.sea)).padEnd(6)} lands ~${fmt(c.asOf + L.sea)}` : "";
     const csv = "﻿" + [head.map(q).join(","), ...lines].join("\n");
     let dl = null; try { dl = await window.claude?.use?.("downloads"); } catch (e) {}
     if (dl) { try { await dl.save({ filename: `kondura-restock-${iso(todayDay())}.csv`, data: csv }); return; } catch (e) { if (e?.code === "declined") return; } }
+    if (window.__localDB) { const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" })); a.download = `kondura-restock-${iso(todayDay())}.csv`; document.body.appendChild(a); a.click(); a.remove(); return; }
     try { await navigator.clipboard.writeText(csv); toast("Restock PO copied. Paste it into Excel."); } catch (e) { toast("Couldn't export in this view."); }
   }
 
