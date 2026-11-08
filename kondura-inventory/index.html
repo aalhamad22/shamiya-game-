@@ -130,6 +130,7 @@ input.inline { width: 72px; padding: 3px 6px; text-align: right; font-family: va
       <button role="tab" data-tab="upload" aria-selected="false">Upload files</button>
       <button role="tab" data-tab="settings" aria-selected="false">Lead times &amp; settings</button>
     </nav>
+    <button class="btn sm" id="refresh-btn" type="button" style="margin-bottom:8px" title="Reload uploads, upcoming stock and settings, then recalculate">↻ Refresh data</button>
   </div>
 </header>
 <main class="wrap" id="app">
@@ -865,6 +866,26 @@ Sea  ${String(n0(g.sea)).padEnd(6)} lands ~${fmt(c.asOf + L.sea)}` : "";
     if (!S.db || S.sample) { S.settings = { ...DEF, ...body }; S.calc = null; render(); toast("Applied" + (S.db ? "" : " (not saved in this view)") + "."); if (!S.db) return; }
     await write((db) => db.doc("config/settings").set(body), "Settings saved");
   });
+
+  async function refreshData() {
+    const btn = document.getElementById("refresh-btn");
+    if (!S.db) { S.calc = null; render(); toast("Recalculated. Saved data isn't available in this view."); return; }
+    btn.disabled = true; btn.textContent = "Refreshing…";
+    try {
+      const [ch, up, inc, upc, set] = await Promise.all([S.db.collection("chunks").get(), S.db.collection("uploads").get(), S.db.collection("incoming").get(), S.db.doc("config/upcoming").get(), S.db.doc("config/settings").get()]);
+      S.chunkDocs = ch.docs.map((d) => ({ id: d.id, ...d.data() })).sort((a, b) => a.id.localeCompare(b.id));
+      S.uploads = up.docs.map((d) => ({ id: d.id, ...d.data() }));
+      S.incoming = Object.fromEntries(inc.docs.map((d) => [d.id, d.data()]));
+      S.upcoming = upc.exists ? decodeUpcoming(upc.data()) : null;
+      S.settings = { ...DEF, ...(set.exists ? set.data() : {}) };
+      S.sample = false; S.rows = decodeChunks(); S.calc = null; S.detail = null; document.querySelector(".drawer-back")?.remove();
+      render();
+      const c = calc();
+      toast(c ? `Refreshed: ${n0(S.rows.length)} stock movements up to ${fmt(c.asOf)}${S.upcoming ? ", upcoming stock loaded" : ""}.` : "Refreshed. No stock moves uploaded yet.");
+    } catch (e) { toast("Couldn't refresh: " + (e?.message || "try again")); }
+    finally { btn.disabled = false; btn.textContent = "↻ Refresh data"; }
+  }
+  document.getElementById("refresh-btn").addEventListener("click", refreshData);
 
   window.__kondura = { compute: () => compute(), S };
   boot();
