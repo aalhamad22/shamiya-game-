@@ -60,6 +60,9 @@ p { margin: 0; }
 .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; min-width: 0; }
 .panel-head { padding: 14px 16px; display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); }
 .panel-body { padding: 16px; display: grid; gap: 14px; }
+.panel-body > *, .stack, .stack > *, label { min-width: 0; }
+.row > label { flex: 1 1 160px; }
+select { max-width: 100%; }
 .tablebox { overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; }
 th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
@@ -141,12 +144,12 @@ input.inline { width: 72px; padding: 3px 6px; text-align: right; font-family: va
 <script>
 (() => {
   // ================= state =================
-  const DEF = { productionDays: 60, seaDays: 60, airDays: 14, airShare: 30, coverDays: 120, buffer: 15, minStock: 5, roundTo: 5, windowDays: 0, soonDays: 30, season: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1], nonSellable: null };
+  const DEF = { productionDays: 60, seaDays: 60, airDays: 14, airShare: 30, coverDays: 120, buffer: 15, minStock: 5, roundTo: 5, windowDays: 0, soonDays: 30, season: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1], nonSellable: null, categories: "Slides: slide\nMules: mule\nSocks: sock\nCaps: cap\nBaby: baby" };
   const S = { tab: "restock", rows: [], uploads: [], chunkDocs: [], incoming: {}, settings: { ...DEF }, db: null, ready: { u: false, c: false }, sample: false, calc: null, imp: null,
     rf: { q: "", status: "all" }, sf: { range: "all", loc: "all", item: "all", group: "month" }, of: { item: "" }, detail: null, confirm: null, busy: null, offline: false };
   const app = document.getElementById("app");
   try { const t = localStorage.getItem("kondura-tab3"); if (t) S.tab = t; } catch (e) {}
-  S.zf = { mode: "pct", by: "item", q: "" };
+  S.zf = { mode: "pct", method: "all", q: "", open: new Set(), qty: {}, src: {} };
   S.upcoming = null; S.upImp = null; S.collapsed = new Set(); S.collapseInit = false;
   try { const c = localStorage.getItem("kondura-collapsed"); if (c) { S.collapsed = new Set(JSON.parse(c)); S.collapseInit = true; } } catch (e) {}
   const saveCollapsed = () => { S.collapseInit = true; try { localStorage.setItem("kondura-collapsed", JSON.stringify([...S.collapsed])); } catch (e) {} };
@@ -168,6 +171,15 @@ input.inline { width: 72px; padding: 3px 6px; text-align: right; font-family: va
   const hashId = (s) => { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return "k" + (h >>> 0).toString(36) + s.length.toString(36); };
   const cleanName = (x) => String(x ?? "").replace(/[\u200B-\u200F\u2060\uFEFF\u00A0]/g, " ").replace(/\s+/g, " ").trim();
   const normName = (x) => cleanName(x).toLowerCase();
+  // "(41, Black)" -> size 41 + colour in the name; "(Beige)" -> colour only, one size
+  const SIZE_WORDS = /^(xxs|xs|s|m|l|xl|xxl|xxxl|one size|free size)$/i;
+  function splitSizeColor(item, size) {
+    const z = String(size ?? "").trim();
+    const parts = z.split(/\s*,\s*/).filter(Boolean);
+    if (parts.length > 1) { const si = parts.findIndex((x) => /\d/.test(x) || SIZE_WORDS.test(x)); if (si >= 0) { const rest = parts.filter((_, i) => i !== si).join(" "); return { item: rest ? item + " - " + rest : item, size: parts[si] }; } }
+    if (z && !/\d/.test(z) && !SIZE_WORDS.test(z)) return { item: item + " - " + z, size: "One size" };
+    return { item, size: z || "One size" };
+  }
   const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   let toastT;
   function toast(msg) { let el = document.querySelector(".toast"); if (!el) { el = document.createElement("div"); el.className = "toast"; el.setAttribute("role", "status"); document.body.appendChild(el); } el.textContent = msg; el.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => (el.hidden = true), 3400); }
@@ -189,7 +201,7 @@ input.inline { width: 72px; padding: 3px 6px; text-align: right; font-family: va
     const groups = new Map();
     for (const r of rows) {
       const k = r.item + "\u0001" + r.size; let g = groups.get(k);
-      if (!g) { g = { key: k, item: r.item, size: r.size, rows: [] }; groups.set(k, g); }
+      if (!g) { g = { key: k, item: r.item, base: r.base || r.item, size: r.size, rows: [] }; groups.set(k, g); }
       g.rows.push(r);
     }
     const H = L.sea + st.coverDays;
@@ -201,15 +213,16 @@ input.inline { width: 72px; padding: 3px 6px; text-align: right; font-family: va
       const idx = new Map();
       for (const u of S.upcoming.rows) { const k = normName(u.item); let f = idx.get(k); if (!f) { f = { sized: new Map(), total: 0, any: false }; idx.set(k, f); } if (u.size) f.sized.set(String(u.size), (f.sized.get(String(u.size)) || 0) + u.qty); else { f.total += u.qty; f.any = true; } }
       const netBy = new Map(); for (const r of rows) if (r.k === "S" || r.k === "R") { const k = r.item + "\u0001" + r.size; netBy.set(k, (netBy.get(k) || 0) - r.delta); }
-      const itemSizes = new Map(); for (const g of groups.values()) { if (!itemSizes.has(g.item)) itemSizes.set(g.item, []); itemSizes.get(g.item).push(g.size); }
-      for (const [item, sz] of itemSizes) {
-        const f = idx.get(normName(item)); if (!f) continue;
-        if (f.sized.size) { for (const z of sz) upc.set(item + "\u0001" + z, { qty: f.sized.get(z) || 0, src: "file" }); continue; }
+      const byItem = new Map(), byBase = new Map();
+      for (const g of groups.values()) { const a = normName(g.item), b = normName(g.base); (byItem.get(a) || byItem.set(a, []).get(a)).push(g); if (b !== a) (byBase.get(b) || byBase.set(b, []).get(b)).push(g); }
+      for (const [k, f] of idx) {
+        const exact = byItem.get(k), gs = exact || byBase.get(k); if (!gs) continue;
+        if (exact && f.sized.size) { for (const g of gs) upc.set(g.key, { qty: f.sized.get(g.size) || 0, src: "file" }); continue; }
         if (!f.any) continue;
-        const w = sz.map((z) => Math.max(0, netBy.get(item + "\u0001" + z) || 0)); let W = w.reduce((a, x) => a + x, 0); if (!W) { w.fill(1); W = w.length; }
+        const w = gs.map((g) => Math.max(0, netBy.get(g.key) || 0)); let W = w.reduce((a, x) => a + x, 0); if (!W) { w.fill(1); W = w.length; }
         const sign = f.total < 0 ? -1 : 1, T = Math.abs(f.total); const raw = w.map((x) => (T * x) / W); const base = raw.map(Math.floor); let left = T - base.reduce((a, x) => a + x, 0);
         raw.map((x, i) => [x - base[i], i]).sort((a, b) => b[0] - a[0]).forEach(([, i]) => { if (left > 0) { base[i]++; left--; } });
-        sz.forEach((z, i) => upc.set(item + "\u0001" + z, { qty: sign * base[i], src: "split", itemTotal: f.total }));
+        gs.forEach((g, i) => upc.set(g.key, { qty: sign * base[i], src: "split", itemTotal: f.total }));
       }
     }
     for (const g of groups.values()) {
@@ -312,7 +325,8 @@ input.inline { width: 72px; padding: 3px 6px; text-align: right; font-family: va
       const Lc = c.locs || [], I = c.items || [], Z = c.sizes || [];
       for (const line of String(c.r || "").split(";")) {
         if (!line) continue; const p = line.split("|");
-        out.push({ i: i++, d: +p[0], loc: Lc[+p[1]], item: I[+p[2]], size: Z[+p[3]], delta: +p[4], k: p[5], bal: p[6] === "" || p[6] == null ? null : +p[6] });
+        const sc = splitSizeColor(I[+p[2]], Z[+p[3]]);
+        out.push({ i: i++, base: I[+p[2]], d: +p[0], loc: Lc[+p[1]], item: sc.item, size: sc.size, delta: +p[4], k: p[5], bal: p[6] === "" || p[6] == null ? null : +p[6] });
       }
     }
     return out;
@@ -439,43 +453,104 @@ input.inline { width: 72px; padding: 3px 6px; text-align: right; font-family: va
       <p class="small muted" style="padding:10px 16px">Click a product to show or hide its sizes; click a size for the shop breakdown. Upcoming = Odoo forecasted − on hand: positive is stock arriving, negative is reserved for customer orders not yet picked up or delivered. Type a number to override a size; clear it to go back to the Odoo figure.</p></section>`;
   }
 
+  // ---------- size mix by category ----------
+  function categoryOf(item, sizes) {
+    const rules = String(S.settings.categories ?? DEF.categories).split("\n").map((l) => { const i = l.indexOf(":"); return i < 0 ? null : { name: l.slice(0, i).trim(), kws: l.slice(i + 1).split(",").map((k) => k.trim().toLowerCase()).filter(Boolean) }; }).filter((r) => r && r.name && r.kws.length);
+    const low = item.toLowerCase();
+    for (const r of rules) if (r.kws.some((k) => low.includes(k))) return r.name;
+    const nums = sizes.map(Number);
+    if (nums.length >= 2 && nums.every((x) => isFinite(x) && x >= 40 && x <= 47)) return "Cloud 40–47";
+    return "Other";
+  }
+  // demand per size measured by DAYS (units ÷ in-stock days), never by raw quantity
+  function productMix(c, it, method) {
+    const own = () => new Map(it.sizes.map((g) => [g.size, { rate: g.rate, net: g.net, days: g.inStockDays }]));
+    if (method === "own") return { map: own(), days: null, fallback: false };
+    const st = S.settings, start = Math.min(...it.sizes.map((g) => g.d0)), from = st.windowDays > 0 ? Math.max(start, c.asOf - st.windowDays + 1) : start;
+    const units = new Map(it.sizes.map((g) => [g.size, 0])); let days = 0;
+    for (let d = from; d <= c.asOf; d++) {
+      let all = true;
+      for (const g of it.sizes) { const i = d - g.d0; const now = i < 0 ? 0 : g.network[i], prev = i - 1 < 0 ? 0 : g.network[i - 1]; if (Math.max(now, prev) < 1) { all = false; break; } }
+      if (!all) continue; days++;
+      for (const g of it.sizes) { const i = d - g.d0; if (i >= 0) units.set(g.size, units.get(g.size) + g.sold[i] - g.ret[i]); }
+    }
+    if (days < 14) return { map: own(), days, fallback: true };
+    return { map: new Map(it.sizes.map((g) => [g.size, { rate: Math.max(0, units.get(g.size)) / days, net: g.net, days }])), days, fallback: false };
+  }
+  function sizeMixData() {
+    const c = calc(); const key = S.zf.method;
+    if (c._mix?.[key]) return c._mix[key];
+    const cats = new Map();
+    for (const it of c.items) {
+      const cat = categoryOf(it.item, it.sizes.map((g) => g.size));
+      const pm = productMix(c, it, key);
+      let C = cats.get(cat); if (!C) { C = { name: cat, products: [], sizes: new Map() }; cats.set(cat, C); }
+      const row = { name: it.item, sizes: pm.map, days: pm.days, fallback: pm.fallback };
+      row.rate = [...pm.map.values()].reduce((a, x) => a + x.rate, 0); row.net = [...pm.map.values()].reduce((a, x) => a + x.net, 0);
+      C.products.push(row);
+      for (const [z, x] of pm.map) { let t = C.sizes.get(z); if (!t) { t = { rate: 0, net: 0, days: Infinity }; C.sizes.set(z, t); } t.rate += x.rate; t.net += x.net; t.days = Math.min(t.days, x.days ?? Infinity); }
+    }
+    const order = (n) => (n === "Cloud 40–47" ? 0 : n === "Slides" ? 1 : n === "Mules" ? 2 : n === "Other" ? 9 : 5);
+    const list = [...cats.values()].sort((a, b) => order(a.name) - order(b.name) || a.name.localeCompare(b.name));
+    for (const C of list) { C.rate = [...C.sizes.values()].reduce((a, x) => a + x.rate, 0); C.net = [...C.sizes.values()].reduce((a, x) => a + x.net, 0); C.products.sort((a, b) => b.rate - a.rate); C.sizeList = [...C.sizes.keys()].sort(sizeSort); }
+    (c._mix ||= {})[key] = list; return list;
+  }
+  function splitQty(total, shares) { // largest remainder so the sizes add up exactly
+    const W = shares.reduce((a, x) => a + x, 0) || 1; const raw = shares.map((x) => (total * x) / W); const base = raw.map(Math.floor); let left = total - base.reduce((a, x) => a + x, 0);
+    raw.map((x, i) => [x - base[i], i]).sort((a, b) => b[0] - a[0]).forEach(([, i]) => { if (left > 0) { base[i]++; left--; } }); return base;
+  }
+  function calcResult(C) {
+    const z = S.zf, qty = Math.max(0, Math.round(num(z.qty[C.name]) || 0)), src = z.src[C.name] || "__cat";
+    const mix = src === "__cat" ? C.sizes : C.products.find((p) => p.name === src)?.sizes || C.sizes;
+    const sizes = C.sizeList.filter((x) => mix.has(x));
+    const parts = splitQty(qty, sizes.map((x) => mix.get(x).rate));
+    const tot = sizes.reduce((a, x) => a + mix.get(x).rate, 0) || 1;
+    return `<div class="tablebox"><table><thead><tr><th>Size</th>${sizes.map((x) => `<th class="r">${esc(x)}</th>`).join("")}<th class="r">Total</th></tr></thead><tbody>
+      <tr><td class="muted">Mix</td>${sizes.map((x) => `<td class="r num muted">${((100 * mix.get(x).rate) / tot).toFixed(1)}%</td>`).join("")}<td class="r num muted">100%</td></tr>
+      <tr><td><b>Order</b></td>${parts.map((u) => `<td class="r"><span class="qty">${qty ? n0(u) : "—"}</span></td>`).join("")}<td class="r"><span class="qty">${qty ? n0(qty) : "—"}</span></td></tr></tbody></table></div>`;
+  }
   function viewSizes() {
     const c = calc(); if (!c) return emptyState();
     const z = S.zf, st = S.settings;
-    const fam = (name) => name.split(/\s+-\s+/)[0].trim();
-    const groups = new Map();
-    for (const it of c.items) {
-      const key = z.by === "family" ? fam(it.item) : it.item;
-      let r = groups.get(key); if (!r) { r = { name: key, n: 0, sizes: new Map() }; groups.set(key, r); } r.n++;
-      for (const g of it.sizes) { let x = r.sizes.get(g.size); if (!x) { x = { rate: 0, net: 0, days: Infinity }; r.sizes.set(g.size, x); } x.rate += g.rate; x.net += g.net; x.days = Math.min(x.days, g.inStockDays); }
-    }
-    let rows = [...groups.values()];
-    const q = z.q.trim().toLowerCase(); if (q) rows = rows.filter((r) => r.name.toLowerCase().includes(q));
-    rows.forEach((r) => { r.rate = [...r.sizes.values()].reduce((a, x) => a + x.rate, 0); r.net = [...r.sizes.values()].reduce((a, x) => a + x.net, 0); });
-    rows.sort((a, b) => b.rate - a.rate);
-    const sizes = [...new Set(rows.flatMap((r) => [...r.sizes.keys()]))].sort(sizeSort);
-    const total = { name: "All shown", sizes: new Map(), rate: 0, net: 0 };
-    for (const r of rows) for (const [k, x] of r.sizes) { let t = total.sizes.get(k); if (!t) { t = { rate: 0, net: 0, days: Infinity }; total.sizes.set(k, t); } t.rate += x.rate; t.net += x.net; t.days = Math.min(t.days, x.days); total.rate += x.rate; total.net += x.net; }
-    const cell = (r, size, isTotal) => {
+    const cats = sizeMixData();
+    const q = z.q.trim().toLowerCase();
+    const cell = (r, size, strong) => {
       const x = r.sizes.get(size); if (!x) return `<td class="r muted">·</td>`;
       const pctV = r.rate ? x.rate / r.rate : 0, raw = r.net ? x.net / r.net : 0;
-      const maxP = Math.max(...[...r.sizes.values()].map((y) => (r.rate ? y.rate / r.rate : 0)), 0.0001);
-      const low = x.days < 30;
-      const title = `${n1(x.rate * 30)} / month on in-stock days · ${x.days === Infinity ? 0 : x.days} in-stock days · raw sales share ${pct(raw)}`;
+      const vals = [...r.sizes.values()]; const maxP = Math.max(...vals.map((y) => (r.rate ? y.rate / r.rate : 0)), 0.0001), maxR = Math.max(...vals.map((y) => (r.net ? y.net / r.net : 0)), 0.0001);
+      const title = `${n1(x.rate * 30)} / month · raw sales share ${pct(raw)}`;
       let main, sub = "";
       if (z.mode === "pct") { main = (pctV * 100).toFixed(1) + "%"; const d = (pctV - raw) * 100; if (Math.abs(d) >= 2) sub = `<div class="small" style="color:${d > 0 ? "var(--bad)" : "var(--muted)"}">sold ${(raw * 100).toFixed(0)}% ${d > 0 ? "▲" : "▼"}</div>`; }
-      else if (z.mode === "mo") main = n1(x.rate * 30);
-      else main = (raw * 100).toFixed(1) + "%";
-      const share = z.mode === "raw" ? raw / Math.max(...[...r.sizes.values()].map((y) => (r.net ? y.net / r.net : 0)), 0.0001) : pctV / maxP;
-      return `<td class="heat" title="${esc(title)}" style="background:color-mix(in srgb, var(--accent) ${Math.round(share * 38)}%, transparent)${isTotal ? ";font-weight:600" : ""}">${main}${low && !isTotal ? '<span class="muted" title="Fewer than 30 in-stock days: less reliable"> *</span>' : ""}${sub}</td>`;
+      else if (z.mode === "mo") main = n1(x.rate * 30); else main = (raw * 100).toFixed(1) + "%";
+      const share = z.mode === "raw" ? raw / maxR : pctV / maxP;
+      return `<td class="heat" title="${esc(title)}" style="background:color-mix(in srgb, var(--accent) ${Math.round(share * 38)}%, transparent)${strong ? ";font-weight:600" : ""}">${main}${sub}</td>`;
     };
     const seg = (key, opts) => `<div class="seg" role="group">${opts.map(([v, l]) => `<button type="button" aria-pressed="${z[key] === v}" data-z${key}="${v}">${l}</button>`).join("")}</div>`;
-    return `<section class="panel"><div class="panel-head"><div class="stack"><h2>Size mix on in-stock days</h2><p class="muted small">Each size's share of demand, counting only days that size had ≥ ${st.minStock} units across sellable locations${st.windowDays > 0 ? ` in the last ${st.windowDays} days` : ""}. Sizes that sold out often look smaller in raw sales; this removes that. Use it as the size split for production.</p></div>
-      <div class="row">${seg("by", [["item", "Per product"], ["family", "Per family"]])}${seg("mode", [["pct", "In-stock mix %"], ["mo", "Demand / month"], ["raw", "Raw sales %"]])}<input id="z-q" type="search" placeholder="Search" value="${esc(z.q)}" style="width:170px"></div></div>
-      <div class="tablebox"><table><thead><tr><th>${z.by === "family" ? "Family" : "Product"}</th>${sizes.map((x) => `<th class="r">${esc(x)}</th>`).join("")}<th class="r">Demand / mo</th></tr></thead>
-      <tbody>${rows.map((r) => `<tr><td style="min-width:200px"><b>${esc(r.name)}</b>${z.by === "family" ? `<div class="small muted">${r.n} product${r.n > 1 ? "s" : ""}</div>` : ""}</td>${sizes.map((x) => cell(r, x)).join("")}<td class="r num">${n1(r.rate * 30)}</td></tr>`).join("") || `<tr><td colspan="${sizes.length + 2}" class="muted">Nothing matches.</td></tr>`}</tbody>
-      ${rows.length > 1 ? `<tfoot><tr><td>All shown</td>${sizes.map((x) => cell(total, x, true)).join("")}<td class="r num">${n1(total.rate * 30)}</td></tr></tfoot>` : ""}</table></div>
-      <p class="small muted" style="padding:10px 16px">In “In-stock mix %”, the line under a size shows its raw sales share when the two differ by 2 points or more. <span style="color:var(--bad)">▲</span> means stock-outs hid real demand for that size. * = fewer than 30 in-stock days, so treat it with care. Hover a cell for the details.</p></section>`;
+    const span = `${fmt(c.first)} – ${fmt(c.asOf)}`;
+    const sections = cats.filter((C) => C.sizeList.length > 1).map((C) => {
+      const prods = q ? C.products.filter((p) => p.name.toLowerCase().includes(q)) : C.products;
+      if (q && !prods.length && !C.name.toLowerCase().includes(q)) return "";
+      const open = z.open.has(C.name) || !!q;
+      const fb = C.products.filter((p) => p.fallback).length;
+      const srcOpts = `<option value="__cat">${esc(C.name)} average</option>` + C.products.map((p) => `<option value="${esc(p.name)}" ${z.src[C.name] === p.name ? "selected" : ""}>${esc(p.name)}</option>`).join("");
+      return `<section class="panel"><div class="panel-head"><div class="stack"><h2>${esc(C.name)}</h2><p class="muted small">${C.products.length} product${C.products.length > 1 ? "s" : ""} · ${n1(C.rate * 30)} sold per month on in-stock days${fb && z.method === "all" ? ` · ${fb} with too few full-size-run days (each size's own in-stock days used)` : ""}</p></div></div>
+        <div class="panel-body">
+          <div class="stack" style="gap:8px"><h3>Order calculator</h3>
+            <div class="row"><label style="max-width:180px">I want to order<input type="number" min="0" step="1" id="zq-${esc(hashId(C.name))}" data-zqty="${esc(C.name)}" value="${esc(z.qty[C.name] ?? "")}" placeholder="e.g. 1000"></label>
+            <label style="max-width:340px">Using the size mix of<select id="zs-${esc(hashId(C.name))}" data-zsrc="${esc(C.name)}">${srcOpts}</select></label></div>
+            <div id="zr-${esc(hashId(C.name))}">${calcResult(C)}</div></div>
+        </div>
+        <div class="tablebox"><table><thead><tr><th>Size mix</th>${C.sizeList.map((x) => `<th class="r">${esc(x)}</th>`).join("")}<th class="r">Sold / mo</th></tr></thead><tbody>
+          <tr class="itemhead click" tabindex="0" data-zcat="${esc(C.name)}"><td style="min-width:220px"><b>${open ? "▾" : "▸"} ${esc(C.name)} average</b><div class="small muted">${open ? "Hide" : "Show"} ${C.products.length} products</div></td>${C.sizeList.map((x) => cell(C, x, true)).join("")}<td class="r num"><b>${n1(C.rate * 30)}</b></td></tr>
+          ${open ? prods.map((p) => `<tr><td style="padding-left:28px">${esc(p.name)}${p.fallback && z.method === "all" ? '<div class="small muted">few full-size-run days: own in-stock days used</div>' : p.days != null ? `<div class="small muted">${p.days} days with all sizes in stock</div>` : ""}</td>${C.sizeList.map((x) => cell(p, x)).join("")}<td class="r num">${n1(p.rate * 30)}</td></tr>`).join("") : ""}
+        </tbody></table></div></section>`;
+    }).join("");
+    return `<section class="panel"><div class="panel-head"><div class="stack"><h2>Size mix</h2><p class="muted small">Measured by speed (units sold per day in stock), not by total quantity, using all uploaded history (${span}). The more history you upload, the more accurate it gets.</p></div>
+      <div class="row"><input id="z-q" type="search" placeholder="Search product" value="${esc(z.q)}" style="width:180px"></div></div>
+      <div class="panel-body"><div class="row" style="gap:16px">
+        <div class="stack"><h3>Count days when</h3>${seg("method", [["all", "All sizes were in stock"], ["own", "That size was in stock"]])}</div>
+        <div class="stack"><h3>Show</h3>${seg("mode", [["pct", "Mix %"], ["mo", "Sold / month"], ["raw", "Raw sales %"]])}</div></div>
+        <p class="small muted">“All sizes were in stock” is the fairest comparison: only days when a customer could choose any size count. Products with fewer than 14 such days use each size's own in-stock days instead. In “Mix %”, “sold X%” shows the raw sales share where it differs by 2+ points; <span style="color:var(--bad)">▲</span> means stock-outs hid real demand. Categories are set in Lead times &amp; settings.</p></div></section>${sections}`;
   }
 
   function matrixTable(rows, dim, label, sizes, valueOf) {
@@ -633,6 +708,8 @@ input.inline { width: 72px; padding: 3px 6px; text-align: right; font-family: va
       ${inp("st-soon", "“Order soon” warning (days)", s.soonDays, 1)}
     </div>
     <div class="stack"><h3>Seasonal index by month (1 = normal month)</h3><div class="season">${MONTHS.map((mn, i) => `<label>${mn}<input id="st-s${i}" type="number" step="0.05" min="0" value="${esc(season[i])}"></label>`).join("")}</div><p class="small muted">Demand in each future month is multiplied by its index. E.g. 1.3 for Ramadan/Eid months, 0.8 for slow summer months.</p></div></div></section>
+    <section class="panel"><div class="panel-head"><div class="stack"><h2>Size-mix categories</h2><p class="muted small">One per line: <span class="num">Name: keyword, keyword</span>. A product joins the first category whose keyword is in its name. Products with sizes 40–47 that match nothing go to “Cloud 40–47”.</p></div></div>
+      <div class="panel-body"><textarea id="st-cats" rows="6" style="font:13px var(--font-data);color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:8px;width:100%">${esc(s.categories ?? DEF.categories)}</textarea></div></section>
     <section class="panel"><div class="panel-head"><div class="stack"><h2>Sellable locations</h2><p class="muted small">Ticked locations count as stock customers can buy (on hand and “in stock” days). Sales from all locations always count.</p></div></div>
       <div class="panel-body">${locs.length ? `<div class="row" style="gap:16px">${locs.map((l, i) => `<label class="chk"><input type="checkbox" id="st-loc${i}" data-loc="${esc(l)}" ${isSellable(l) ? "checked" : ""}>${esc(l)}</label>`).join("")}</div>` : `<p class="muted">Upload a file to see its locations.</p>`}</div></section>
     <div class="row"><button class="btn primary" type="submit">Save settings</button><span class="small muted">Changes recalculate the plan for everyone using this page.</span></div>
@@ -767,7 +844,7 @@ Sea  ${String(n0(g.sea)).padEnd(6)} lands ~${fmt(c.asOf + L.sea)}` : "";
     let size = String(sizeCol ?? "").trim();
     const m = s.match(/\s*\(([^()]{1,12})\)\s*$/);
     if (m) { if (!size) size = m[1].trim(); s = s.slice(0, m.index).trim(); }
-    return { item: s, size: size || "One size" };
+    return splitSizeColor(s, size);
   }
   function normalise(m) {
     const g = (r, f) => (m.map[f] === "" || m.map[f] == null ? "" : r[m.map[f]]);
@@ -868,12 +945,13 @@ Sea  ${String(n0(g.sea)).padEnd(6)} lands ~${fmt(c.asOf + L.sea)}` : "";
 
   // ================= events =================
   document.querySelector("nav.tabs").addEventListener("click", (e) => { const b = e.target.closest("button[data-tab]"); if (!b) return; S.tab = b.dataset.tab; S.confirm = null; try { localStorage.setItem("kondura-tab3", S.tab); } catch (er) {} render(); });
-  app.addEventListener("input", (e) => { if (e.target.id === "z-q") { S.zf.q = e.target.value; const p = e.target.selectionStart; render(); const f = document.getElementById("z-q"); f.focus(); try { f.setSelectionRange(p, p); } catch (er) {} return; } if (e.target.id === "r-q") { S.rf.q = e.target.value; const p = e.target.selectionStart; render(); const f = document.getElementById("r-q"); f.focus(); try { f.setSelectionRange(p, p); } catch (er) {} } });
+  app.addEventListener("input", (e) => { if (e.target.dataset.zqty != null) { const k = e.target.dataset.zqty; S.zf.qty[k] = e.target.value; const C = sizeMixData().find((x) => x.name === k); const el = document.getElementById("zr-" + hashId(k)); if (C && el) el.innerHTML = calcResult(C); return; } if (e.target.id === "z-q") { S.zf.q = e.target.value; const p = e.target.selectionStart; render(); const f = document.getElementById("z-q"); f.focus(); try { f.setSelectionRange(p, p); } catch (er) {} return; } if (e.target.id === "r-q") { S.rf.q = e.target.value; const p = e.target.selectionStart; render(); const f = document.getElementById("r-q"); f.focus(); try { f.setSelectionRange(p, p); } catch (er) {} } });
   app.addEventListener("change", async (e) => {
     const t = e.target;
     if (t.id === "file" && t.files[0]) return readFile(t.files[0]);
     if (t.id === "s-range") { S.sf.range = t.value; render(); } else if (t.id === "s-loc") { S.sf.loc = t.value; render(); } else if (t.id === "s-item") { S.sf.item = t.value; render(); } else if (t.id === "s-group") { S.sf.group = t.value; render(); }
     else if (t.id === "o-item") { S.of.item = t.value; render(); }
+    else if (t.dataset.zsrc != null) { const k = t.dataset.zsrc; S.zf.src[k] = t.value; const C = sizeMixData().find((x) => x.name === k); const el = document.getElementById("zr-" + hashId(k)); if (C && el) el.innerHTML = calcResult(C); }
     else if (t.dataset.inc != null) {
       const key = t.dataset.inc, [item, size] = key.split("\u0001"), id = hashId(key), clear = t.value.trim() === "", v = num(t.value) || 0;
       if (S.sample || !S.db) { if (clear) delete S.incoming[id]; else S.incoming[id] = { item, size, qty: v }; S.calc = null; render(); return; }
@@ -887,13 +965,14 @@ Sea  ${String(n0(g.sea)).padEnd(6)} lands ~${fmt(c.asOf + L.sea)}` : "";
     else if (t.id === "map-format") { S.imp.format = t.value; render(); }
     else if (t.id === "map-sheet") { S.imp.sheet = t.value; loadSheet(); render(); }
   });
-  app.addEventListener("keydown", (e) => { const tg = e.target.closest("tr[data-toggle]"); if (tg && e.target === tg && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); tg.click(); return; } const tr = e.target.closest("tr[data-detail]"); if (tr && e.target === tr && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); S.detail = tr.dataset.detail; renderDetail(); } });
+  app.addEventListener("keydown", (e) => { const zc = e.target.closest("tr[data-zcat]"); if (zc && e.target === zc && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); zc.click(); return; } const tg = e.target.closest("tr[data-toggle]"); if (tg && e.target === tg && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); tg.click(); return; } const tr = e.target.closest("tr[data-detail]"); if (tr && e.target === tr && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); S.detail = tr.dataset.detail; renderDetail(); } });
   document.addEventListener("keydown", (e) => { if (e.key === "Escape" && S.detail) { S.detail = null; document.querySelector(".drawer-back")?.remove(); } });
   app.addEventListener("click", async (e) => {
     if (e.target.closest("[data-stop]")) return;
     const gt = e.target.closest("[data-goto]"); if (gt) { S.tab = gt.dataset.goto; render(); return; }
     const tg = e.target.closest("tr[data-toggle]"); if (tg) { const k = tg.dataset.toggle; S.collapsed.has(k) ? S.collapsed.delete(k) : S.collapsed.add(k); saveCollapsed(); render(); return; }
-    const zb = e.target.closest("[data-zby]"); if (zb) { S.zf.by = zb.dataset.zby; render(); return; }
+    const zme = e.target.closest("[data-zmethod]"); if (zme) { S.zf.method = zme.dataset.zmethod; render(); return; }
+    const zc = e.target.closest("tr[data-zcat]"); if (zc) { const k = zc.dataset.zcat; S.zf.open.has(k) ? S.zf.open.delete(k) : S.zf.open.add(k); render(); return; }
     const zm = e.target.closest("[data-zmode]"); if (zm) { S.zf.mode = zm.dataset.zmode; render(); return; }
     const rs = e.target.closest("[data-rstatus]"); if (rs) { S.rf.status = rs.dataset.rstatus; render(); return; }
     const tr = e.target.closest("tr[data-detail]"); if (tr) { S.detail = tr.dataset.detail; renderDetail(); return; }
@@ -918,7 +997,7 @@ Sea  ${String(n0(g.sea)).padEnd(6)} lands ~${fmt(c.asOf + L.sea)}` : "";
     const v = (id, d) => { const el = document.getElementById(id); const x = el ? num(el.value) : null; return x == null ? d : x; };
     const locBoxes = [...document.querySelectorAll("[data-loc]")];
     const body = { productionDays: v("st-prod", 60), seaDays: v("st-sea", 60), airDays: v("st-air", 14), airShare: Math.min(100, Math.max(0, v("st-airshare", 30))), coverDays: v("st-cover", 120), buffer: v("st-buffer", 15), minStock: Math.max(1, v("st-min", 5)), roundTo: Math.max(1, v("st-round", 5)), windowDays: v("st-window", 0), soonDays: v("st-soon", 30),
-      season: MONTHS.map((_, i) => v("st-s" + i, 1)), nonSellable: locBoxes.length ? locBoxes.filter((b) => !b.checked).map((b) => b.dataset.loc) : S.settings.nonSellable };
+      season: MONTHS.map((_, i) => v("st-s" + i, 1)), categories: document.getElementById("st-cats")?.value ?? S.settings.categories, nonSellable: locBoxes.length ? locBoxes.filter((b) => !b.checked).map((b) => b.dataset.loc) : S.settings.nonSellable };
     if (!S.db || S.sample) { S.settings = { ...DEF, ...body }; S.calc = null; render(); toast("Applied" + (S.db ? "" : " (not saved in this view)") + "."); if (!S.db) return; }
     await write((db) => db.doc("config/settings").set(body), "Settings saved");
   });
