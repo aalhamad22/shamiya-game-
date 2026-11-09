@@ -91,9 +91,23 @@ create table if not exists public.shipments (
   updated_by uuid references public.profiles(id)
 );
 
+-- Supplier contacts keep the name only: phone numbers and email addresses are removed.
+create or replace function public.clean_contact(t text) returns text
+language sql immutable as $$
+  select btrim(regexp_replace(regexp_replace(regexp_replace(regexp_replace(regexp_replace(coalesce(t, ''),
+    '\m(tel|phone|mobile|e-?mail)\M\s*[:.]?', '', 'gi'),
+    '\S+@\S+', '', 'g'),
+    '\+?\(?\d[\d\s()+-]{5,}\d', '', 'g'),
+    '\(\s*\)', '', 'g'),
+    '\s{2,}', ' ', 'g'), ' -+:,=');
+$$;
+
 create or replace function public.shipment_before() returns trigger
 language plpgsql security definer set search_path = public as $$
 begin
+  if auth.uid() is not null then
+    new.contact := public.clean_contact(new.contact);
+  end if;
   if tg_op = 'INSERT' then
     new.created_at := now();
     new.created_by := auth.uid();
