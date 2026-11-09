@@ -250,7 +250,7 @@ html, body { margin: 0; }
       <button class="stage" data-stage="all" aria-pressed="false"><span class="lbl"><span class="dot all"></span>All</span><span class="n" data-n="all">–</span></button>
     </div>
     <div class="tools">
-      <input class="search" id="q" type="search" placeholder="Search product, S/N, tracking no., carrier, note" aria-label="Search shipments">
+      <input class="search" id="q" type="search" placeholder="Search product, PO number, S/N, tracking no., carrier" aria-label="Search shipments">
       <select class="sel" id="kind" aria-label="Sheet">
         <option value="">Bulk + Sample</option>
         <option value="Bulk">Bulk only</option>
@@ -321,6 +321,7 @@ html, body { margin: 0; }
           <fieldset>
             <legend>Shipment</legend>
             <div class="fld full"><label for="f-product">Product</label><input id="f-product" type="text"></div>
+            <div class="fld"><label for="f-po">PO number</label><input id="f-po" type="text" placeholder="e.g. PO-2026-0153"></div>
             <div class="fld"><label for="f-kind">Sheet</label><select id="f-kind"><option>Bulk</option><option>Sample</option></select></div>
             <div class="fld"><label for="f-sn">S/N</label><input id="f-sn" type="number" step="1"></div>
             <div class="fld"><label for="f-qty">Qty</label><input id="f-qty" type="number" step="any"></div>

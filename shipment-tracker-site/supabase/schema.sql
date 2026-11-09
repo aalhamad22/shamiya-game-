@@ -67,6 +67,7 @@ create table if not exists public.shipments (
   kind text not null default 'Bulk',
   sn numeric,
   product text not null,
+  po_number text default '',
   contact text default '',
   qty numeric,
   company text default '',
@@ -92,6 +93,8 @@ create table if not exists public.shipments (
 );
 
 -- Supplier contacts keep the name only: phone numbers and email addresses are removed.
+alter table public.shipments add column if not exists po_number text default '';
+
 create or replace function public.clean_contact(t text) returns text
 language sql immutable as $$
   select btrim(regexp_replace(regexp_replace(regexp_replace(regexp_replace(regexp_replace(coalesce(t, ''),
@@ -167,7 +170,7 @@ create index if not exists history_time on public.history (changed_at desc);
 create or replace function public.shipment_after() returns trigger
 language plpgsql security definer set search_path = public as $$
 declare
-  labels jsonb := '{"status":"Status","eta":"ETA","promised_eta":"Promised ETA","ready_on":"Ready date","arrived_on":"Arrival date","remarks":"Remarks","product":"Product","kind":"Sheet","sn":"S/N","qty":"Qty","company":"Company","contact":"Contact person","mode":"Shipping","carrier":"Shipped by","tracking":"Tracking no.","month":"Month","shipping_kwd":"Shipping cost","clearance_kwd":"Clearance cost","total_kwd":"Total charges"}';
+  labels jsonb := '{"status":"Status","eta":"ETA","promised_eta":"Promised ETA","ready_on":"Ready date","arrived_on":"Arrival date","remarks":"Remarks","product":"Product","po_number":"PO number","kind":"Sheet","sn":"S/N","qty":"Qty","company":"Company","contact":"Contact person","mode":"Shipping","carrier":"Shipped by","tracking":"Tracking no.","month":"Month","shipping_kwd":"Shipping cost","clearance_kwd":"Clearance cost","total_kwd":"Total charges"}';
   o jsonb; n jsonb; k text;
 begin
   if auth.uid() is null then return null; end if; -- imports made by the owner in the SQL editor are not logged

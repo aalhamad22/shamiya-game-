@@ -97,7 +97,7 @@
     if (S.kind && s.kind !== S.kind) return false;
     if (S.stage === 'open' && !(g === 'wait' || g === 'way' || g === 'late')) return false;
     if (['wait', 'way', 'late', 'done'].includes(S.stage) && g !== S.stage) return false;
-    if (S.q && ![s.sn, s.product, s.tracking, s.carrier, s.remarks, s.status, s.company, s.contact].join(' ').toLowerCase().includes(S.q)) return false;
+    if (S.q && ![s.sn, s.po_number, s.product, s.tracking, s.carrier, s.remarks, s.status, s.company, s.contact].join(' ').toLowerCase().includes(S.q)) return false;
     return true;
   }).sort((a, b) => {
     if (S.stage === 'done' || S.stage === 'all') return String(nextDate(b) || '').localeCompare(String(nextDate(a) || '')) || (b.sn || 0) - (a.sn || 0);
@@ -128,7 +128,7 @@
       const n = docCount[s.id];
       return h('tr', { tabindex: 0, onclick: () => openSheet(s.id), onkeydown: (e) => { if (e.key === 'Enter') openSheet(s.id); } },
         h('td', { class: 'mono' }, fmtNum(s.sn)),
-        h('td', { class: 'prod' }, s.product, h('small', null, [s.kind, s.qty ? fmtNum(s.qty) + ' pcs' : '', s.company].filter(Boolean).join(' · '), n ? h('span', { class: 'clip', text: ' · ' + n + (n === 1 ? ' document' : ' documents') }) : '')),
+        h('td', { class: 'prod' }, s.product, h('small', null, [s.kind, s.po_number ? 'PO ' + s.po_number : '', s.qty ? fmtNum(s.qty) + ' pcs' : '', s.company].filter(Boolean).join(' · '), n ? h('span', { class: 'clip', text: ' · ' + n + (n === 1 ? ' document' : ' documents') }) : '')),
         h('td', null, h('span', { class: 'pill ' + g, text: g === 'other' ? (s.status || 'Other') : STAGE_LABEL[g] })),
         etaCell,
         h('td', { class: 'hide-sm' }, s.mode || ''),
@@ -174,7 +174,7 @@
   };
 
   // ---------- side sheet ----------
-  const F = { status: 'f-status', eta: 'f-eta', ready_on: 'f-ready', arrived_on: 'f-arrived', remarks: 'f-remarks', product: 'f-product', kind: 'f-kind', sn: 'f-sn', qty: 'f-qty', company: 'f-company', contact: 'f-contact', mode: 'f-mode', carrier: 'f-carrier', tracking: 'f-tracking', month: 'f-month', shipping_kwd: 'f-ship', clearance_kwd: 'f-clear' };
+  const F = { status: 'f-status', eta: 'f-eta', ready_on: 'f-ready', arrived_on: 'f-arrived', remarks: 'f-remarks', product: 'f-product', po_number: 'f-po', kind: 'f-kind', sn: 'f-sn', qty: 'f-qty', company: 'f-company', contact: 'f-contact', mode: 'f-mode', carrier: 'f-carrier', tracking: 'f-tracking', month: 'f-month', shipping_kwd: 'f-ship', clearance_kwd: 'f-clear' };
   const NUMS = ['sn', 'qty', 'shipping_kwd', 'clearance_kwd'];
   const DATES = ['eta', 'ready_on', 'arrived_on'];
   const STATUSES = ['Not pick up yet', 'Picked up', 'Received', 'Delivered', 'Canceled'];
@@ -199,7 +199,7 @@
     const s = id ? S.ships.get(id) : null;
     S.openId = id || null; S.isNew = !id;
     $('sh-title').textContent = s ? s.product : 'New shipment';
-    $('sh-meta').textContent = s ? [s.kind + ' shipments', s.sn ? 'S/N ' + fmtNum(s.sn) : '', s.tracking ? 'Tracking ' + s.tracking : ''].filter(Boolean).join(' · ') : 'Fill in what you know. The first ETA you save becomes the promised ETA.';
+    $('sh-meta').textContent = s ? [s.kind + ' shipments', s.sn ? 'S/N ' + fmtNum(s.sn) : '', s.po_number ? 'PO ' + s.po_number : '', s.tracking ? 'Tracking ' + s.tracking : ''].filter(Boolean).join(' · ') : 'Fill in what you know. The first ETA you save becomes the promised ETA.';
     fillEtaBox(s);
     const opts = [...new Set([...STATUSES, ...(s && s.status ? [s.status] : [])])];
     $('f-status').replaceChildren(...opts.map((o) => h('option', { value: o, text: o })));
