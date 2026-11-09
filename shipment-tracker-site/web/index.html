@@ -333,7 +333,13 @@ html, body { margin: 0; }
             <div class="fld"><label for="f-month">Month</label><input id="f-month" type="text" placeholder="2026-11"></div>
             <div class="fld"><label for="f-ship">Shipping cost (KWD)</label><input id="f-ship" type="number" step="0.001"></div>
             <div class="fld"><label for="f-clear">Clearance cost (KWD)</label><input id="f-clear" type="number" step="0.001"></div>
-            <div class="fld"><label for="f-total">Total charges (KWD)</label><input id="f-total" type="number" step="0.001" readonly tabindex="-1"><span class="hint">Shipping + clearance, worked out when you enter the costs</span></div>
+          </fieldset>
+          <fieldset>
+            <legend>Customs duty</legend>
+            <div class="fld"><label for="f-duty">Customs duty (KWD)</label><input id="f-duty" type="number" step="0.001"></div>
+            <div class="fld"><label for="f-decl">Customs declaration no.</label><input id="f-decl" type="text"></div>
+            <div class="fld"><label for="f-dutydate">Duty paid on</label><input id="f-dutydate" type="date"></div>
+            <div class="fld"><label for="f-total">Total charges (KWD)</label><input id="f-total" type="number" step="0.001" readonly tabindex="-1"><span class="hint">Shipping + clearance + customs duty, worked out when you enter the costs</span></div>
           </fieldset>
           <div class="actions" id="sh-actions">
             <button class="btn primary" type="submit" id="sh-save">Save changes</button>

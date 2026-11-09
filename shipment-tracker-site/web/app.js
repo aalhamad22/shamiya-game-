@@ -138,7 +138,7 @@
   };
 
   // ---------- change log ----------
-  const DATE_FIELDS = ['eta', 'ready_on', 'arrived_on', 'promised_eta'];
+  const DATE_FIELDS = ['eta', 'ready_on', 'arrived_on', 'promised_eta', 'duty_paid_on'];
   const describe = (ev) => {
     const box = h('div', { class: 'what' });
     if (ev.field === 'note') { box.append('Added a note'); return [box, h('div', { class: 'note', text: ev.new_value || '' })]; }
@@ -174,9 +174,9 @@
   };
 
   // ---------- side sheet ----------
-  const F = { status: 'f-status', eta: 'f-eta', ready_on: 'f-ready', arrived_on: 'f-arrived', remarks: 'f-remarks', product: 'f-product', po_number: 'f-po', kind: 'f-kind', sn: 'f-sn', qty: 'f-qty', company: 'f-company', contact: 'f-contact', mode: 'f-mode', carrier: 'f-carrier', tracking: 'f-tracking', month: 'f-month', shipping_kwd: 'f-ship', clearance_kwd: 'f-clear' };
-  const NUMS = ['sn', 'qty', 'shipping_kwd', 'clearance_kwd'];
-  const DATES = ['eta', 'ready_on', 'arrived_on'];
+  const F = { status: 'f-status', eta: 'f-eta', ready_on: 'f-ready', arrived_on: 'f-arrived', remarks: 'f-remarks', product: 'f-product', po_number: 'f-po', kind: 'f-kind', sn: 'f-sn', qty: 'f-qty', company: 'f-company', contact: 'f-contact', mode: 'f-mode', carrier: 'f-carrier', tracking: 'f-tracking', month: 'f-month', shipping_kwd: 'f-ship', clearance_kwd: 'f-clear', duty_kwd: 'f-duty', customs_declaration: 'f-decl', duty_paid_on: 'f-dutydate' };
+  const NUMS = ['sn', 'qty', 'shipping_kwd', 'clearance_kwd', 'duty_kwd'];
+  const DATES = ['eta', 'ready_on', 'arrived_on', 'duty_paid_on'];
   const STATUSES = ['Not pick up yet', 'Picked up', 'Received', 'Delivered', 'Canceled'];
   const same = (a, b) => (a === null || a === undefined || a === '' ? '' : String(a)) === (b === null || b === undefined || b === '' ? '' : String(b));
   const sameNum = (a, b) => (a === null || a === undefined || a === '' ? null : Number(a)) === (b === null || b === undefined || b === '' ? null : Number(b));
@@ -190,10 +190,10 @@
     $('sh-eta').replaceChildren(...cells.map(([k, v, bad]) => h('div', null, h('div', { class: 'k', text: k }), h('div', { class: 'v' + (bad ? ' bad' : ''), text: v }))));
   };
   const calcTotal = () => {
-    const a = $('f-ship').value.trim(), b = $('f-clear').value.trim();
-    $('f-total').value = a === '' && b === '' ? '' : (Math.round(((Number(a) || 0) + (Number(b) || 0)) * 1000) / 1000).toFixed(3);
+    const a = $('f-ship').value.trim(), b = $('f-clear').value.trim(), c = $('f-duty').value.trim();
+    $('f-total').value = a === '' && b === '' && c === '' ? '' : (Math.round(((Number(a) || 0) + (Number(b) || 0) + (Number(c) || 0)) * 1000) / 1000).toFixed(3);
   };
-  ['f-ship', 'f-clear'].forEach((id) => $(id).addEventListener('input', calcTotal));
+  ['f-ship', 'f-clear', 'f-duty'].forEach((id) => $(id).addEventListener('input', calcTotal));
 
   const openSheet = (id) => {
     const s = id ? S.ships.get(id) : null;

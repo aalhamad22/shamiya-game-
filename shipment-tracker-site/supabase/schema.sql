@@ -73,6 +73,9 @@ create table if not exists public.shipments (
   company text default '',
   shipping_kwd numeric,
   clearance_kwd numeric,
+  duty_kwd numeric,
+  customs_declaration text default '',
+  duty_paid_on date,
   total_kwd numeric,
   carrier text default '',
   tracking text default '',
@@ -94,6 +97,9 @@ create table if not exists public.shipments (
 
 -- Supplier contacts keep the name only: phone numbers and email addresses are removed.
 alter table public.shipments add column if not exists po_number text default '';
+alter table public.shipments add column if not exists duty_kwd numeric;
+alter table public.shipments add column if not exists customs_declaration text default '';
+alter table public.shipments add column if not exists duty_paid_on date;
 
 create or replace function public.clean_contact(t text) returns text
 language sql immutable as $$
@@ -116,8 +122,8 @@ begin
     new.created_by := auth.uid();
     new.promised_eta := coalesce(new.promised_eta, new.eta);
     -- imports run by the owner in the SQL editor keep their totals as they are
-    if auth.uid() is not null and (new.shipping_kwd is not null or new.clearance_kwd is not null) then
-      new.total_kwd := coalesce(new.shipping_kwd, 0) + coalesce(new.clearance_kwd, 0);
+    if auth.uid() is not null and (new.shipping_kwd is not null or new.clearance_kwd is not null or new.duty_kwd is not null) then
+      new.total_kwd := coalesce(new.shipping_kwd, 0) + coalesce(new.clearance_kwd, 0) + coalesce(new.duty_kwd, 0);
     end if;
   elsif auth.uid() is null then
     return new; -- the owner working in the SQL editor
@@ -132,9 +138,9 @@ begin
       new.promised_eta := old.promised_eta;
     end if;
     -- total = shipping + clearance whenever a cost changes; otherwise the old total stays
-    if new.shipping_kwd is distinct from old.shipping_kwd or new.clearance_kwd is distinct from old.clearance_kwd then
-      new.total_kwd := case when new.shipping_kwd is null and new.clearance_kwd is null then null
-                            else coalesce(new.shipping_kwd, 0) + coalesce(new.clearance_kwd, 0) end;
+    if new.shipping_kwd is distinct from old.shipping_kwd or new.clearance_kwd is distinct from old.clearance_kwd or new.duty_kwd is distinct from old.duty_kwd then
+      new.total_kwd := case when new.shipping_kwd is null and new.clearance_kwd is null and new.duty_kwd is null then null
+                            else coalesce(new.shipping_kwd, 0) + coalesce(new.clearance_kwd, 0) + coalesce(new.duty_kwd, 0) end;
     else
       new.total_kwd := old.total_kwd;
     end if;
@@ -170,7 +176,7 @@ create index if not exists history_time on public.history (changed_at desc);
 create or replace function public.shipment_after() returns trigger
 language plpgsql security definer set search_path = public as $$
 declare
-  labels jsonb := '{"status":"Status","eta":"ETA","promised_eta":"Promised ETA","ready_on":"Ready date","arrived_on":"Arrival date","remarks":"Remarks","product":"Product","po_number":"PO number","kind":"Sheet","sn":"S/N","qty":"Qty","company":"Company","contact":"Contact person","mode":"Shipping","carrier":"Shipped by","tracking":"Tracking no.","month":"Month","shipping_kwd":"Shipping cost","clearance_kwd":"Clearance cost","total_kwd":"Total charges"}';
+  labels jsonb := '{"status":"Status","eta":"ETA","promised_eta":"Promised ETA","ready_on":"Ready date","arrived_on":"Arrival date","remarks":"Remarks","product":"Product","po_number":"PO number","kind":"Sheet","sn":"S/N","qty":"Qty","company":"Company","contact":"Contact person","mode":"Shipping","carrier":"Shipped by","tracking":"Tracking no.","month":"Month","shipping_kwd":"Shipping cost","clearance_kwd":"Clearance cost","duty_kwd":"Customs duty","customs_declaration":"Customs declaration no.","duty_paid_on":"Duty paid on","total_kwd":"Total charges"}';
   o jsonb; n jsonb; k text;
 begin
   if auth.uid() is null then return null; end if; -- imports made by the owner in the SQL editor are not logged
