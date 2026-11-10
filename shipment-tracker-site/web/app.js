@@ -75,6 +75,22 @@
     const { data, error } = await S.sb.from('shipments').select('*').limit(5000);
     if (error) throw error;
     S.ships = new Map(data.map((s) => [s.id, s]));
+    await loadTracking();
+  };
+  // tracking numbers: only super users and the admin can read them (enforced by the database)
+  const canTrack = () => !!(S.profile && (S.profile.role === 'super' || S.profile.role === 'admin'));
+  const loadTracking = async () => {
+    if (!canTrack()) { for (const s of S.ships.values()) s.tracking = ''; return; }
+    const { data, error } = await S.sb.from('shipment_tracking').select('shipment_id, tracking').limit(10000);
+    if (error) return;
+    const m = new Map(data.map((t) => [t.shipment_id, t.tracking]));
+    for (const s of S.ships.values()) s.tracking = m.get(s.id) || '';
+  };
+  const saveTracking = async (id, tracking) => {
+    if (!canTrack()) return;
+    const { error } = await S.sb.from('shipment_tracking').upsert({ shipment_id: id, tracking: tracking || '' }, { onConflict: 'shipment_id' });
+    if (error) throw error;
+    const s = S.ships.get(id); if (s) s.tracking = tracking || '';
   };
   const loadRecent = async () => {
     const { data, error } = await S.sb.from('history').select('*').order('changed_at', { ascending: false }).limit(300);
@@ -325,17 +341,27 @@
     S.saving = true; $('sh-save').disabled = true; msg('Saving…');
     try {
       if (s) {
-        const { data, error } = await S.sb.from('shipments').update(change).eq('id', s.id).select().single();
-        if (error) throw error;
+        const newTracking = 'tracking' in change ? change.tracking : null;
+        delete change.tracking;
+        let data = s;
+        if (Object.keys(change).length) {
+          const r = await S.sb.from('shipments').update(change).eq('id', s.id).select().single();
+          if (r.error) throw r.error;
+          data = r.data;
+        }
+        data.tracking = s.tracking;
         S.ships.set(data.id, data);
+        if (newTracking !== null) await saveTracking(s.id, newTracking);
         msg('Saved.'); $('reason-wrap').hidden = true; $('f-reason').value = '';
         fillEtaBox(data); $('f-total').value = data.total_kwd !== null ? Number(data.total_kwd).toFixed(3) : '';
         toast('Saved. The change is in the log.'); queueRefresh();
         loadDetail(s.id);
       } else {
+        const tr = v.tracking; delete v.tracking;
         const { data, error } = await S.sb.from('shipments').insert(Object.assign(v, { source: 'Added on the website' })).select().single();
         if (error) throw error;
         S.ships.set(data.id, data);
+        if (tr) await saveTracking(data.id, tr);
         toast('Shipment added.'); closeSheet(); queueRefresh();
       }
       renderList();
@@ -465,12 +491,13 @@
     try {
       const part = {
         kind: s.kind, sn: s.sn, product: s.product, po_number: s.po_number || '', company: s.company, contact: s.contact, month: s.month,
-        mode, qty, eta: $('sp-eta').value || null, carrier: $('sp-carrier').value.trim(), tracking: $('sp-tracking').value.trim(),
+        mode, qty, eta: $('sp-eta').value || null, carrier: $('sp-carrier').value.trim(), 
         status: s.status || 'Not pick up yet', remarks: '', parent_id: s.parent_id || s.id, source: 'Split from ' + (s.mode ? s.mode.toLowerCase() + ' ' : '') + 'shipment S/N ' + (s.sn ?? ''),
       };
       const { data, error } = await S.sb.from('shipments').insert(part).select().single();
       if (error) throw error;
       S.ships.set(data.id, data);
+      if ($('sp-tracking').value.trim()) await saveTracking(data.id, $('sp-tracking').value.trim());
       if (qty !== null && s.qty) {
         const { data: upd, error: e2 } = await S.sb.from('shipments').update({ qty: Number(s.qty) - qty }).eq('id', s.id).select().single();
         if (!e2 && upd) { S.ships.set(upd.id, upd); $('f-qty').value = upd.qty ?? ''; }
@@ -727,15 +754,17 @@
       btn.disabled = false;
       if (error) { toast('Could not change access: ' + errText(error)); return; }
       p.role = role; renderTeam();
-      toast(role === 'member' ? nameOf(p.id) + ' can now use the tracker.' : nameOf(p.id) + ' can no longer use the tracker.');
+      toast(role === 'super' ? nameOf(p.id) + ' is now a super user and can see tracking numbers.' : role === 'member' ? nameOf(p.id) + ' is a member and can use the tracker.' : nameOf(p.id) + ' can no longer use the tracker.');
     };
     $('team-rows').replaceChildren(...list.map((p) => {
       const act = h('div', { class: 'row-actions' });
       if (p.id !== S.me) {
         if (p.role === 'pending' || p.role === 'removed') act.append(h('button', { class: 'btn primary', type: 'button', text: p.role === 'removed' ? 'Give access again' : 'Approve', onclick: (e) => setRole(p, 'member', e.target) }));
-        if (p.role === 'member' || p.role === 'pending') act.append(h('button', { class: 'btn', type: 'button', text: p.role === 'pending' ? 'Decline' : 'Remove access', onclick: (e) => setRole(p, 'removed', e.target) }));
+        if (p.role === 'member') act.append(h('button', { class: 'btn', type: 'button', text: 'Make super user', onclick: (e) => setRole(p, 'super', e.target) }));
+        if (p.role === 'super') act.append(h('button', { class: 'btn', type: 'button', text: 'Make regular member', onclick: (e) => setRole(p, 'member', e.target) }));
+        if (p.role === 'member' || p.role === 'super' || p.role === 'pending') act.append(h('button', { class: 'btn', type: 'button', text: p.role === 'pending' ? 'Decline' : 'Remove access', onclick: (e) => setRole(p, 'removed', e.target) }));
       }
-      const pill = { pending: ['wait', 'Waiting for you'], member: ['done', 'Approved'], admin: ['way', 'Admin'], removed: ['other', 'Removed'] }[p.role] || ['other', p.role];
+      const pill = { pending: ['wait', 'Waiting for you'], member: ['done', 'Member'], super: ['way', 'Super user'], admin: ['way', 'Admin'], removed: ['other', 'Removed'] }[p.role] || ['other', p.role];
       return h('tr', null,
         h('td', { class: 'prod' }, nameOf(p.id), ''),
         h('td', { class: 'hide-sm muted', text: p.email || '' }),
@@ -856,6 +885,7 @@
       .on('postgres_changes', { event: '*', schema: 'public', table: 'history' }, queueRefresh)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'documents' }, queueRefresh)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'shipment_items' }, queueRefresh)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'shipment_tracking' }, queueRefresh)
       .subscribe();
     if (!S.timer) S.timer = setInterval(queueRefresh, 60000);
   };
@@ -864,7 +894,7 @@
   const applyHeader = () => {
     const p = S.profile;
     const nm = p ? [p.first_name, p.last_name].filter(Boolean).join(' ') : '';
-    $('who-line').textContent = S.session ? (nm || S.session.user.email) + (p && p.role === 'admin' ? ' · admin' : p && p.role === 'member' ? ' · can edit' : '') : 'Not signed in';
+    $('who-line').textContent = S.session ? (nm || S.session.user.email) + (p && p.role === 'admin' ? ' · admin' : p && p.role === 'super' ? ' · super user' : p && p.role === 'member' ? ' · member' : '') : 'Not signed in';
     const signedIn = !!S.session;
     $('out-btn').hidden = !signedIn; $('repw-btn').hidden = !signedIn; $('rename-btn').hidden = !signedIn || !p;
   };
@@ -880,6 +910,10 @@
     if (p.role === 'removed') { gate('No access', 'Your access to the tracker was removed. Ask the admin if you think this is a mistake.', null, true); return; }
     $('gate').hidden = true; $('tabs').hidden = false; $('foot').hidden = false; $('add-btn').hidden = false;
     $('tab-team').hidden = p.role !== 'admin';
+    $('f-tracking').closest('.fld').hidden = !canTrack();
+    $('carrier-head').textContent = canTrack() ? 'Carrier · tracking' : 'Carrier';
+    $('sp-tracking').closest('.fld').hidden = !canTrack();
+    $('q').placeholder = canTrack() ? 'Search product, PO number, S/N, tracking no., carrier' : 'Search product, PO number, S/N, carrier';
     renderTeam();
     if (!S.started) {
       S.started = true;

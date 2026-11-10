@@ -9,7 +9,7 @@ create table if not exists public.profiles (
   first_name text not null default '',
   last_name text not null default '',
   email text,
-  role text not null default 'pending' check (role in ('pending', 'member', 'admin', 'removed')),
+  role text not null default 'pending' check (role in ('pending', 'member', 'super', 'admin', 'removed')),
   created_at timestamptz not null default now()
 );
 
@@ -31,8 +31,18 @@ create trigger on_auth_user_created after insert on auth.users
 
 create or replace function public.is_member() returns boolean
 language sql stable security definer set search_path = public as $$
-  select exists (select 1 from public.profiles where id = auth.uid() and role in ('member', 'admin'));
+  select exists (select 1 from public.profiles where id = auth.uid() and role in ('member', 'super', 'admin'));
 $$;
+-- super users and the admin can see tracking numbers
+create or replace function public.is_super() returns boolean
+language sql stable security definer set search_path = public as $$
+  select exists (select 1 from public.profiles where id = auth.uid() and role in ('super', 'admin'));
+$$;
+-- allow the 'super' role on databases made before it existed
+do $$ begin
+  alter table public.profiles drop constraint if exists profiles_role_check;
+  alter table public.profiles add constraint profiles_role_check check (role in ('pending', 'member', 'super', 'admin', 'removed'));
+end $$;
 create or replace function public.is_admin() returns boolean
 language sql stable security definer set search_path = public as $$
   select exists (select 1 from public.profiles where id = auth.uid() and role = 'admin');
@@ -118,6 +128,7 @@ language plpgsql security definer set search_path = public as $$
 begin
   if auth.uid() is not null then
     new.contact := public.clean_contact(new.contact);
+    new.tracking := ''; -- tracking numbers live in shipment_tracking, readable only by super users and the admin
   end if;
   if tg_op = 'INSERT' then
     new.created_at := now();
@@ -218,7 +229,8 @@ create policy "members edit shipments" on public.shipments for update using (pub
 
 alter table public.history enable row level security;
 drop policy if exists "members read history" on public.history;
-create policy "members read history" on public.history for select using (public.is_member());
+create policy "members read history" on public.history for select
+  using (public.is_member() and (field <> 'tracking' or public.is_super()));
 drop policy if exists "members add notes" on public.history;
 create policy "members add notes" on public.history for insert
   with check (public.is_member() and field in ('note', 'stock', 'split') and changed_by = auth.uid());
@@ -304,3 +316,53 @@ end $$;
 -- ---------- deleting shipments (admin only; kept so it can be restored, and logged) ----------
 alter table public.shipments add column if not exists deleted_at timestamptz;
 alter table public.shipments add column if not exists deleted_by uuid references public.profiles(id);
+
+-- ---------- tracking numbers: only super users and the admin can see or change them ----------
+create table if not exists public.shipment_tracking (
+  shipment_id text primary key references public.shipments(id),
+  tracking text not null default '',
+  updated_at timestamptz not null default now(),
+  updated_by uuid references public.profiles(id)
+);
+-- move tracking numbers out of the shipments table (runs once; later runs find nothing to move)
+insert into public.shipment_tracking (shipment_id, tracking)
+  select id, tracking from public.shipments where coalesce(btrim(tracking), '') <> ''
+  on conflict (shipment_id) do nothing;
+update public.shipments set tracking = '' where coalesce(tracking, '') <> '';
+
+create or replace function public.tracking_before() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  new.tracking := btrim(coalesce(new.tracking, ''));
+  new.updated_at := now();
+  new.updated_by := auth.uid();
+  return new;
+end $$;
+drop trigger if exists tracking_before on public.shipment_tracking;
+create trigger tracking_before before insert or update on public.shipment_tracking
+  for each row execute function public.tracking_before();
+
+create or replace function public.tracking_after() returns trigger
+language plpgsql security definer set search_path = public as $$
+declare oldv text := case when tg_op = 'UPDATE' then old.tracking else '' end;
+begin
+  if auth.uid() is null or oldv is not distinct from new.tracking then return null; end if;
+  insert into public.history (shipment_id, field, label, old_value, new_value, changed_by)
+  values (new.shipment_id, 'tracking', 'Tracking no.', nullif(oldv, ''), new.tracking, auth.uid());
+  update public.shipments set updated_at = now(), updated_by = auth.uid() where id = new.shipment_id;
+  return null;
+end $$;
+drop trigger if exists tracking_after on public.shipment_tracking;
+create trigger tracking_after after insert or update on public.shipment_tracking
+  for each row execute function public.tracking_after();
+
+alter table public.shipment_tracking enable row level security;
+drop policy if exists "super reads tracking" on public.shipment_tracking;
+create policy "super reads tracking" on public.shipment_tracking for select using (public.is_super());
+drop policy if exists "super adds tracking" on public.shipment_tracking;
+create policy "super adds tracking" on public.shipment_tracking for insert with check (public.is_super());
+drop policy if exists "super edits tracking" on public.shipment_tracking;
+create policy "super edits tracking" on public.shipment_tracking for update using (public.is_super());
+do $$ begin
+  begin alter publication supabase_realtime add table public.shipment_tracking; exception when others then null; end;
+end $$;

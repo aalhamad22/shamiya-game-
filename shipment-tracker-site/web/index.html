@@ -307,7 +307,7 @@ html, body { margin: 0; }
           <th data-sort="stage"><button class="sortb" type="button">Stage <span class="ar">▲▼</span></button></th>
           <th data-sort="date"><button class="sortb" type="button">ETA <span class="ar">▲▼</span></button></th>
           <th class="hide-sm" data-sort="mode"><button class="sortb" type="button">Mode <span class="ar">▲▼</span></button></th>
-          <th class="hide-sm" data-sort="carrier"><button class="sortb" type="button">Carrier · tracking <span class="ar">▲▼</span></button></th>
+          <th class="hide-sm" data-sort="carrier"><button class="sortb" type="button"><span id="carrier-head">Carrier · tracking</span> <span class="ar">▲▼</span></button></th>
           <th class="hide-sm" data-sort="updated"><button class="sortb" type="button">Last change <span class="ar">▲▼</span></button></th>
         </tr></thead>
         <tbody id="rows"><tr><td colspan="7" class="empty">Loading shipments…</td></tr></tbody>
@@ -330,7 +330,7 @@ html, body { margin: 0; }
   </section>
 
   <section id="view-team" hidden>
-    <div class="notice">New people create an account with their first name, last name, work email and a password. They wait here until you approve them. Removing someone stops them signing in to the tracker straight away.</div>
+    <div class="notice">New people create an account with their first name, last name, work email and a password, and wait here until you approve them. <b>Members</b> can see and edit shipments but not tracking numbers. <b>Super users</b> also see tracking numbers. Removing someone stops them using the tracker straight away.</div>
     <div class="card"><div class="scroll">
       <table class="list">
         <thead><tr><th>Name</th><th class="hide-sm">Email</th><th>Signed up</th><th>Access</th><th></th></tr></thead>
