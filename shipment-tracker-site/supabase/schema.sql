@@ -97,6 +97,8 @@ create table if not exists public.shipments (
 
 -- Supplier contacts keep the name only: phone numbers and email addresses are removed.
 alter table public.shipments add column if not exists po_number text default '';
+alter table public.shipments add column if not exists deleted_at timestamptz;
+alter table public.shipments add column if not exists deleted_by uuid references public.profiles(id);
 alter table public.shipments add column if not exists duty_kwd numeric;
 alter table public.shipments add column if not exists customs_declaration text default '';
 alter table public.shipments add column if not exists duty_paid_on date;
@@ -129,6 +131,13 @@ begin
     return new; -- the owner working in the SQL editor
   else
     new.id := old.id;
+    -- only the admin can delete or restore a shipment
+    if new.deleted_at is distinct from old.deleted_at then
+      if not public.is_admin() then raise exception 'Only the admin can delete shipments'; end if;
+      new.deleted_by := case when new.deleted_at is null then null else auth.uid() end;
+    else
+      new.deleted_by := old.deleted_by;
+    end if;
     new.created_at := old.created_at;
     new.created_by := old.created_by;
     -- the first ETA is the promise and stays locked (only the admin can change it)
@@ -176,7 +185,7 @@ create index if not exists history_time on public.history (changed_at desc);
 create or replace function public.shipment_after() returns trigger
 language plpgsql security definer set search_path = public as $$
 declare
-  labels jsonb := '{"status":"Status","eta":"ETA","promised_eta":"Promised ETA","ready_on":"Ready date","arrived_on":"Arrival date","remarks":"Remarks","product":"Product","po_number":"PO number","kind":"Sheet","sn":"S/N","qty":"Qty","company":"Company","contact":"Contact person","mode":"Shipping","carrier":"Shipped by","tracking":"Tracking no.","month":"Month","shipping_kwd":"Shipping cost","clearance_kwd":"Clearance cost","duty_kwd":"Customs duty","customs_declaration":"Customs declaration no.","duty_paid_on":"Duty paid on","total_kwd":"Total charges"}';
+  labels jsonb := '{"status":"Status","eta":"ETA","promised_eta":"Promised ETA","ready_on":"Ready date","arrived_on":"Arrival date","remarks":"Remarks","product":"Product","po_number":"PO number","kind":"Sheet","sn":"S/N","qty":"Qty","company":"Company","contact":"Contact person","mode":"Shipping","carrier":"Shipped by","tracking":"Tracking no.","month":"Month","shipping_kwd":"Shipping cost","clearance_kwd":"Clearance cost","duty_kwd":"Customs duty","customs_declaration":"Customs declaration no.","duty_paid_on":"Duty paid on","total_kwd":"Total charges","deleted_at":"Deleted"}';
   o jsonb; n jsonb; k text;
 begin
   if auth.uid() is null then return null; end if; -- imports made by the owner in the SQL editor are not logged
@@ -291,3 +300,7 @@ create policy "admin removes stock" on public.shipment_items for delete using (p
 do $$ begin
   begin alter publication supabase_realtime add table public.shipment_items; exception when others then null; end;
 end $$;
+
+-- ---------- deleting shipments (admin only; kept so it can be restored, and logged) ----------
+alter table public.shipments add column if not exists deleted_at timestamptz;
+alter table public.shipments add column if not exists deleted_by uuid references public.profiles(id);

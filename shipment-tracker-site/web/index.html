@@ -267,6 +267,7 @@ html, body { margin: 0; }
       <button class="stage late" data-stage="late" aria-pressed="false"><span class="lbl"><span class="dot late"></span>Past ETA</span><span class="n" data-n="late">–</span></button>
       <button class="stage" data-stage="done" aria-pressed="false"><span class="lbl"><span class="dot done"></span>Arrived</span><span class="n" data-n="done">–</span></button>
       <button class="stage" data-stage="all" aria-pressed="false"><span class="lbl"><span class="dot all"></span>All</span><span class="n" data-n="all">–</span></button>
+      <button class="stage" data-stage="deleted" aria-pressed="false" id="stage-deleted" hidden><span class="lbl"><span class="dot late"></span>Deleted</span><span class="n" data-n="deleted">–</span></button>
     </div>
     <div class="tools">
       <input class="search" id="q" type="search" placeholder="Search product, PO number, S/N, tracking no., carrier" aria-label="Search shipments">
@@ -325,6 +326,7 @@ html, body { margin: 0; }
       <button class="x" id="sh-close" aria-label="Close">×</button>
     </div>
     <div class="sheet-body">
+      <div class="confirm" id="del-banner" hidden></div>
       <div class="eta-box" id="sh-eta"></div>
       <form id="sh-form" novalidate>
         <div style="display:flex;flex-direction:column;gap:18px">
@@ -366,6 +368,10 @@ html, body { margin: 0; }
           </div>
         </div>
       </form>
+      <div class="blk" id="del-wrap" hidden>
+        <div><button class="btn" type="button" id="del-btn" style="color:var(--bad);border-color:var(--bad)">Delete shipment</button></div>
+        <div class="confirm" id="del-confirm" hidden></div>
+      </div>
       <div class="blk" id="split-wrap">
         <h3 class="section-title">Same PO: air and sea parts</h3>
         <p class="hint muted" id="split-hint" style="margin:0;font-size:12px"></p>
@@ -384,7 +390,7 @@ html, body { margin: 0; }
       <div class="blk" id="stock-wrap">
         <h3 class="section-title">Stock on this shipment</h3>
         <div class="card"><div class="scroll"><table class="list mini">
-          <thead><tr><th>SKU / code</th><th>Item</th><th class="hide-sm">Color</th><th class="hide-sm">Size</th><th class="num hide-sm">Cartons</th><th class="num">Qty</th></tr></thead>
+          <thead><tr><th>SKU / code</th><th>Item</th><th class="hide-sm">Color</th><th class="hide-sm">Size</th><th class="num">Qty</th></tr></thead>
           <tbody id="stock-rows"><tr><td colspan="6" class="empty">No stock list yet.</td></tr></tbody>
           <tfoot id="stock-foot" hidden></tfoot>
         </table></div></div>
@@ -393,7 +399,7 @@ html, body { margin: 0; }
           <input id="stock-file" type="file" accept=".xlsx,.xls,.csv" hidden>
           <button class="btn" type="button" id="stock-template">Download template</button>
           <button class="btn" type="button" id="stock-clear" hidden>Clear stock list</button>
-          <span class="hint" id="stock-msg">Excel or CSV with columns like SKU, Description, Color, Size, Cartons, Qty. A packing list usually works as it is.</span>
+          <span class="hint" id="stock-msg">Excel or CSV with columns like SKU, Description, Color, Size, Qty. A packing list usually works as it is.</span>
         </div>
         <div class="confirm" id="stock-confirm" hidden></div>
         <div class="card" id="stock-preview" hidden></div>

@@ -93,6 +93,8 @@
 
   // ---------- list ----------
   const filtered = () => [...S.ships.values()].filter((s) => {
+    if (S.stage === 'deleted') { if (!s.deleted_at) return false; }
+    else if (s.deleted_at) return false;
     const g = stageOf(s);
     if (S.kind && s.kind !== S.kind) return false;
     if (S.stage === 'open' && !(g === 'wait' || g === 'way' || g === 'late')) return false;
@@ -106,8 +108,9 @@
 
   const normPoL = (p) => String(p || '').trim().toLowerCase();
   const renderList = () => {
-    const all = [...S.ships.values()];
-    const c = { open: 0, wait: 0, way: 0, late: 0, done: 0, all: all.length };
+    const all = [...S.ships.values()].filter((x) => !x.deleted_at);
+    const c = { open: 0, wait: 0, way: 0, late: 0, done: 0, all: all.length, deleted: S.ships.size - all.length };
+    $('stage-deleted').hidden = !(S.profile && S.profile.role === 'admin' && c.deleted);
     for (const s of all) { const g = stageOf(s); if (c[g] !== undefined) c[g]++; if (g === 'wait' || g === 'way' || g === 'late') c.open++; }
     for (const [k, v] of Object.entries(c)) document.querySelectorAll(`[data-n="${k}"]`).forEach((el) => { el.textContent = v; });
     const rows = filtered();
@@ -146,6 +149,7 @@
     const box = h('div', { class: 'what' });
     if (ev.field === 'note') { box.append('Added a note'); return [box, h('div', { class: 'note', text: ev.new_value || '' })]; }
     if (ev.field === 'created') { box.append('Added this shipment'); return [box]; }
+    if (ev.field === 'deleted_at') { box.append(h('b', { class: ev.new_value ? 'late' : '', text: ev.new_value ? 'Deleted this shipment' : 'Restored this shipment' })); return [box]; }
     if (ev.field === 'split' || ev.field === 'stock') { box.append(h('b', { text: ev.field === 'split' ? 'Split: ' : 'Stock: ' }), ev.new_value || ''); return [box]; }
     if (ev.field === 'file') { box.append('Uploaded ', h('b', { text: (ev.label || 'document').toLowerCase() }), ': ', ev.new_value || ''); return [box]; }
     const isDate = DATE_FIELDS.includes(ev.field);
@@ -217,6 +221,7 @@
     $('note-wrap').hidden = !s; $('docs-wrap').hidden = !s; upMsg(UP_HINT);
     S.detail = [];
     $('sh-log').replaceChildren(h('div', { class: 'empty', text: s ? 'Loading history…' : 'History starts when you save.' }));
+    renderDeleted(s);
     $('split-wrap').hidden = !s; $('stock-wrap').hidden = !s; $('po-stock-wrap').hidden = true;
     $('stock-preview').hidden = true; $('stock-confirm').hidden = true; S.items = []; pending = null;
     if (s) { loadDetail(id); renderDocs(); renderSplit(); stockMsg(STOCK_HINT); renderStock(); loadItems(); }
@@ -350,7 +355,7 @@
   const normPo = (p) => String(p || '').trim().toLowerCase();
   const groupOf = (s) => {
     if (!s) return [];
-    const all = [...S.ships.values()];
+    const all = [...S.ships.values()].filter((x) => !x.deleted_at || x.id === s.id);
     const seen = new Set([s.id]);
     const queue = [s];
     while (queue.length) {
@@ -439,11 +444,11 @@
     if (!s) return;
     const mine = S.items.filter((i) => i.shipment_id === s.id);
     const body = $('stock-rows');
-    if (!mine.length) body.replaceChildren(h('tr', null, h('td', { colspan: 6, class: 'empty', text: 'No stock list yet. Import the packing list or stock sheet for this shipment.' })));
-    else body.replaceChildren(...mine.map((i) => h('tr', null, h('td', { class: 'mono', text: i.sku || '' }), h('td', { text: i.description || '' }), h('td', { class: 'hide-sm', text: i.color || '' }), h('td', { class: 'hide-sm', text: i.size || '' }), h('td', { class: 'num hide-sm', text: fmtNum(i.cartons) }), h('td', { class: 'num', text: fmtNum(i.qty) }))));
-    const tq = mine.reduce((a, i) => a + (Number(i.qty) || 0), 0), tc = mine.reduce((a, i) => a + (Number(i.cartons) || 0), 0);
+    if (!mine.length) body.replaceChildren(h('tr', null, h('td', { colspan: 5, class: 'empty', text: 'No stock list yet. Import the packing list or stock sheet for this shipment.' })));
+    else body.replaceChildren(...mine.map((i) => h('tr', null, h('td', { class: 'mono', text: i.sku || '' }), h('td', { text: i.description || '' }), h('td', { class: 'hide-sm', text: i.color || '' }), h('td', { class: 'hide-sm', text: i.size || '' }), h('td', { class: 'num', text: fmtNum(i.qty) }))));
+    const tq = mine.reduce((a, i) => a + (Number(i.qty) || 0), 0);
     $('stock-foot').hidden = !mine.length;
-    $('stock-foot').replaceChildren(h('tr', null, h('td', { colspan: 4, text: 'Total · ' + mine.length + (mine.length === 1 ? ' line' : ' lines') }), h('td', { class: 'num hide-sm', text: tc ? fmtNum(tc) : '' }), h('td', { class: 'num', text: fmtNum(tq) })));
+    $('stock-foot').replaceChildren(h('tr', null, h('td', { colspan: 4, text: 'Total · ' + mine.length + (mine.length === 1 ? ' line' : ' lines') }), h('td', { class: 'num', text: fmtNum(tq) })));
     $('stock-clear').hidden = !(mine.length && S.profile && S.profile.role === 'admin');
     // across the PO
     const group = groupOf(s);
@@ -470,7 +475,7 @@
     $('po-stock-foot').replaceChildren(h('tr', null, h('td', { text: 'Total' }), ...sums.map((v) => h('td', { class: 'num', text: fmtNum(v) })), h('td', { class: 'num', text: fmtNum(sums.reduce((a, b) => a + b, 0)) })));
   };
 
-  const STOCK_HINT = 'Excel or CSV with columns like SKU, Description, Color, Size, Cartons, Qty. A packing list usually works as it is.';
+  const STOCK_HINT = 'Excel or CSV with columns like SKU, Description, Color, Size, Qty. A packing list usually works as it is.';
   const stockMsg = (t, bad) => { $('stock-msg').textContent = t; $('stock-msg').className = 'hint' + (bad ? ' bad' : ''); };
   let xlsxReady = null;
   const loadXlsx = () => xlsxReady || (xlsxReady = new Promise((res, rej) => {
@@ -495,7 +500,6 @@
   };
   const COLS = [
     ['qty', /^(total\s*)?(qty|q'?ty|quantity|pcs|pieces|units|total\s*pcs|total\s*qty)\b|quantity|\bpcs\b|\bqty\b/i],
-    ['cartons', /carton|\bctns?\b|\bboxe?s?\b|no\.?\s*of\s*(ctn|box)/i],
     ['sku', /\bsku\b|item\s*(code|no)|style|article|\bcode\b|model|\bref\b|barcode|part\s*no/i],
     ['color', /colou?r/i],
     ['size', /\bsize\b/i],
@@ -525,11 +529,11 @@
       const sku = g('sku'), desc = g('description');
       if (qty === null || (!sku && !desc)) continue;
       if (/^(sub)?total|^grand/i.test(sku) || /^(sub)?total|^grand/i.test(desc)) continue;
-      lines.push({ sku, description: desc, color: g('color'), size: g('size'), cartons: toNum(map.cartons === undefined ? null : r[map.cartons]), qty });
+      lines.push({ sku, description: desc, color: g('color'), size: g('size'), qty });
     }
     if (!lines.length) return { error: 'The file has a header row but no lines with a quantity.' };
     const headers = rows[hi];
-    const used = Object.entries(map).map(([k, i]) => String(headers[i]).trim() + ' → ' + { sku: 'SKU', description: 'Item', color: 'Color', size: 'Size', cartons: 'Cartons', qty: 'Qty' }[k]);
+    const used = Object.entries(map).map(([k, i]) => String(headers[i]).trim() + ' → ' + { sku: 'SKU', description: 'Item', color: 'Color', size: 'Size', qty: 'Qty' }[k]);
     return { lines, used };
   };
   let pending = null;
@@ -572,8 +576,8 @@
         h('div', null, h('b', { text: p.file }), (p.sheet ? ' (sheet "' + p.sheet + '")' : ''), ': ', h('b', { text: p.lines.length + ' lines, ' + fmtNum(total) + ' pcs' }), ' will be added to this ', h('b', { text: (s.mode || '').toLowerCase() || '' }), ' shipment.'),
         h('div', { class: 'muted', style: 'font-size:12px', text: 'Columns found: ' + p.used.join(', ') }),
         h('div', { class: 'scroll' }, h('table', { class: 'list mini' },
-          h('thead', null, h('tr', null, ...['SKU', 'Item', 'Color', 'Size', 'Cartons', 'Qty'].map((t, i) => h('th', { class: i > 3 ? 'num' : '', text: t })))),
-          h('tbody', null, ...p.lines.slice(0, 8).map((l) => h('tr', null, h('td', { class: 'mono', text: l.sku }), h('td', { text: l.description }), h('td', { text: l.color }), h('td', { text: l.size }), h('td', { class: 'num', text: fmtNum(l.cartons) }), h('td', { class: 'num', text: fmtNum(l.qty) })))))),
+          h('thead', null, h('tr', null, ...['SKU', 'Item', 'Color', 'Size', 'Qty'].map((t, i) => h('th', { class: i > 3 ? 'num' : '', text: t })))),
+          h('tbody', null, ...p.lines.slice(0, 8).map((l) => h('tr', null, h('td', { class: 'mono', text: l.sku }), h('td', { text: l.description }), h('td', { text: l.color }), h('td', { text: l.size }), h('td', { class: 'num', text: fmtNum(l.qty) })))))),
         p.lines.length > 8 ? h('div', { class: 'muted', style: 'font-size:12px', text: '…and ' + (p.lines.length - 8) + ' more lines' }) : '',
         h('label', { style: 'display:flex;gap:8px;align-items:center' }, setQty, 'Set this shipment\'s Qty to ' + fmtNum(total) + ' pcs'),
         h('div', { class: 'actions' },
@@ -603,7 +607,7 @@
     } catch (ex) { stockMsg('Could not save the stock list: ' + errText(ex), true); btn.disabled = false; }
   };
   $('stock-template').addEventListener('click', () => {
-    const csv = 'SKU,Description,Color,Size,Cartons,Qty\nKS-001,Kondura socks crew,Black,M,10,500\n';
+    const csv = 'SKU,Description,Color,Size,Qty\nKS-001,Kondura socks crew,Black,M,500\n';
     const a = h('a', { href: URL.createObjectURL(new Blob([csv], { type: 'text/csv' })), download: 'stock-list-template.csv' });
     document.body.append(a); a.click(); a.remove();
   });
@@ -621,6 +625,38 @@
         $('stock-confirm').hidden = true; toast('Stock list removed.'); loadItems(); loadDetail(s.id); queueRefresh();
       } }),
       h('button', { class: 'btn', type: 'button', text: 'Keep them', onclick: () => { $('stock-confirm').hidden = true; } }));
+  });
+
+  // ---------- deleting shipments (admin only, can be restored) ----------
+  const renderDeleted = (s) => {
+    const admin = S.profile && S.profile.role === 'admin';
+    $('del-confirm').hidden = true;
+    $('del-wrap').hidden = !(s && admin && !s.deleted_at);
+    const ban = $('del-banner');
+    if (!s || !s.deleted_at) { ban.hidden = true; return; }
+    ban.hidden = false;
+    ban.replaceChildren(h('span', { text: 'This shipment was deleted by ' + nameOf(s.deleted_by) + ' on ' + fmtWhen(s.deleted_at) + '. It is hidden from the list and the counts.' }),
+      admin ? h('button', { class: 'btn primary', type: 'button', text: 'Restore shipment', onclick: async (e) => {
+        e.target.disabled = true;
+        const { data, error } = await S.sb.from('shipments').update({ deleted_at: null }).eq('id', s.id).select().single();
+        if (error) { toast('Could not restore: ' + errText(error)); e.target.disabled = false; return; }
+        S.ships.set(data.id, data); toast('Shipment restored.'); renderDeleted(data); renderList(); loadDetail(s.id); queueRefresh();
+      } }) : '');
+  };
+  $('del-btn').addEventListener('click', () => {
+    const s = S.ships.get(S.openId);
+    if (!s) return;
+    const box = $('del-confirm');
+    box.hidden = false;
+    box.replaceChildren(h('span', { text: 'Delete "' + s.product + '"' + (s.sn ? ' (S/N ' + fmtNum(s.sn) + ')' : '') + '? It disappears from the list for everyone. You can restore it later from the Deleted filter.' }),
+      h('button', { class: 'btn', type: 'button', style: 'color:var(--bad);border-color:var(--bad)', text: 'Yes, delete it', onclick: async (e) => {
+        e.target.disabled = true;
+        const { error } = await S.sb.from('shipments').update({ deleted_at: new Date().toISOString() }).eq('id', s.id);
+        if (error) { toast('Could not delete: ' + errText(error)); e.target.disabled = false; return; }
+        const cur = S.ships.get(s.id); if (cur) cur.deleted_at = new Date().toISOString();
+        toast('Shipment deleted. You can restore it from Deleted.'); closeSheet(); renderList(); queueRefresh();
+      } }),
+      h('button', { class: 'btn', type: 'button', text: 'Cancel', onclick: () => { box.hidden = true; } }));
   });
 
   // ---------- team (admin) ----------
@@ -754,7 +790,7 @@
       try {
         await Promise.all([loadShipments(), loadRecent(), loadDocs(), loadProfiles()]);
         renderList(); if (S.view === 'log') renderLog(); renderTeam();
-        if (S.openId) { fillEtaBox(S.ships.get(S.openId)); renderDocs(); loadDetail(S.openId); renderSplit(); loadItems(); }
+        if (S.openId) { renderDeleted(S.ships.get(S.openId)); fillEtaBox(S.ships.get(S.openId)); renderDocs(); loadDetail(S.openId); renderSplit(); loadItems(); }
         applyHeader();
       } catch (e) { /* next change retries */ }
     }, 400);
