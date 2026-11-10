@@ -212,7 +212,7 @@ drop policy if exists "members read history" on public.history;
 create policy "members read history" on public.history for select using (public.is_member());
 drop policy if exists "members add notes" on public.history;
 create policy "members add notes" on public.history for insert
-  with check (public.is_member() and field = 'note' and changed_by = auth.uid());
+  with check (public.is_member() and field in ('note', 'stock', 'split') and changed_by = auth.uid());
 -- no update or delete policy: the change log cannot be edited or deleted
 
 -- ---------- invoices and packing lists ----------
@@ -260,4 +260,34 @@ do $$ begin
   begin alter publication supabase_realtime add table public.shipments; exception when others then null; end;
   begin alter publication supabase_realtime add table public.history; exception when others then null; end;
   begin alter publication supabase_realtime add table public.documents; exception when others then null; end;
+end $$;
+
+-- ---------- split shipments (one PO sent as several shipments, e.g. part by air, part by sea) ----------
+alter table public.shipments add column if not exists parent_id text references public.shipments(id);
+
+-- ---------- stock lines: what is inside each shipment ----------
+create table if not exists public.shipment_items (
+  id bigserial primary key,
+  shipment_id text not null references public.shipments(id),
+  import_id text,
+  sku text default '',
+  description text default '',
+  color text default '',
+  size text default '',
+  cartons numeric,
+  qty numeric,
+  created_by uuid references public.profiles(id) default auth.uid(),
+  created_at timestamptz not null default now()
+);
+create index if not exists shipment_items_shipment on public.shipment_items (shipment_id);
+alter table public.shipment_items enable row level security;
+drop policy if exists "members read stock" on public.shipment_items;
+create policy "members read stock" on public.shipment_items for select using (public.is_member());
+drop policy if exists "members add stock" on public.shipment_items;
+create policy "members add stock" on public.shipment_items for insert
+  with check (public.is_member() and created_by = auth.uid());
+drop policy if exists "admin removes stock" on public.shipment_items;
+create policy "admin removes stock" on public.shipment_items for delete using (public.is_admin());
+do $$ begin
+  begin alter publication supabase_realtime add table public.shipment_items; exception when others then null; end;
 end $$;

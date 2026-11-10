@@ -167,6 +167,25 @@ html, body { margin: 0; }
   .up .hint.bad { color: var(--bad); }
   .kind { font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--accent); margin-right: 6px; }
   .clip { color: var(--accent); font-weight: 500; }
+  .blk { display: flex; flex-direction: column; gap: 8px; }
+  .part { display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--line); cursor: pointer; }
+  .part:last-child { border-bottom: 0; }
+  .part:hover { background: var(--bg); }
+  .part.cur { background: var(--accent-soft); cursor: default; }
+  .part .nm { font-weight: 500; overflow-wrap: anywhere; }
+  .part .sub { font-size: 12px; color: var(--muted); }
+  .mode { display: inline-block; font-size: 11px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; padding: 1px 7px; border-radius: 4px; margin-right: 6px; border: 1px solid currentColor; }
+  .mode.air { color: var(--accent); } .mode.sea { color: var(--ok); } .mode.land, .mode.none { color: var(--muted); }
+  .splitf { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; padding: 12px; border: 1.5px dashed var(--accent); border-radius: 8px; }
+  .splitf .full { grid-column: 1 / -1; }
+  @media (max-width: 480px) { .splitf { grid-template-columns: 1fr; } }
+  table.mini { font-size: 13px; }
+  table.mini th, table.mini td { padding: 6px 10px; }
+  table.mini tbody tr { cursor: default; }
+  table.mini tbody tr:hover { background: none; }
+  table.mini tfoot td { font-weight: 600; border-top: 1px solid var(--line); padding: 6px 10px; }
+  .num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .confirm { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 10px 12px; background: var(--bad-soft); border-radius: 8px; }
   footer { color: var(--muted); font-size: 12px; padding-block: 24px 32px; }
 
 </style>
@@ -347,6 +366,45 @@ html, body { margin: 0; }
           </div>
         </div>
       </form>
+      <div class="blk" id="split-wrap">
+        <h3 class="section-title">Same PO: air and sea parts</h3>
+        <p class="hint muted" id="split-hint" style="margin:0;font-size:12px"></p>
+        <div class="card"><div id="split-list"></div></div>
+        <div><button class="btn" type="button" id="split-open">Split part of this order into another shipment</button></div>
+        <form class="splitf" id="split-form" novalidate hidden>
+          <div class="fld"><label for="sp-mode">The new part goes by</label><select id="sp-mode"><option>Air</option><option>Sea</option><option>Land</option></select></div>
+          <div class="fld"><label for="sp-qty">Qty in the new part</label><input id="sp-qty" type="number" step="any" min="0"><span class="hint" id="sp-qty-hint"></span></div>
+          <div class="fld"><label for="sp-eta">ETA of the new part</label><input id="sp-eta" type="date"></div>
+          <div class="fld"><label for="sp-carrier">Shipped by</label><input id="sp-carrier" type="text" placeholder="e.g. DHL, Frontline"></div>
+          <div class="fld full"><label for="sp-tracking">Tracking no. (optional)</label><input id="sp-tracking" type="text"></div>
+          <span class="err full" id="sp-err" hidden></span>
+          <div class="actions full"><button class="btn primary" type="submit" id="sp-go">Create the new part</button><button class="btn" type="button" id="sp-cancel">Cancel</button></div>
+        </form>
+      </div>
+      <div class="blk" id="stock-wrap">
+        <h3 class="section-title">Stock on this shipment</h3>
+        <div class="card"><div class="scroll"><table class="list mini">
+          <thead><tr><th>SKU / code</th><th>Item</th><th class="hide-sm">Color</th><th class="hide-sm">Size</th><th class="num hide-sm">Cartons</th><th class="num">Qty</th></tr></thead>
+          <tbody id="stock-rows"><tr><td colspan="6" class="empty">No stock list yet.</td></tr></tbody>
+          <tfoot id="stock-foot" hidden></tfoot>
+        </table></div></div>
+        <div class="up">
+          <label class="btn" for="stock-file">Import stock list</label>
+          <input id="stock-file" type="file" accept=".xlsx,.xls,.csv" hidden>
+          <button class="btn" type="button" id="stock-template">Download template</button>
+          <button class="btn" type="button" id="stock-clear" hidden>Clear stock list</button>
+          <span class="hint" id="stock-msg">Excel or CSV with columns like SKU, Description, Color, Size, Cartons, Qty. A packing list usually works as it is.</span>
+        </div>
+        <div class="confirm" id="stock-confirm" hidden></div>
+        <div class="card" id="stock-preview" hidden></div>
+      </div>
+      <div class="blk" id="po-stock-wrap" hidden>
+        <h3 class="section-title">Stock across this PO</h3>
+        <p class="hint muted" style="margin:0;font-size:12px">What is coming by air and by sea, item by item, for every part of this PO.</p>
+        <div class="card"><div class="scroll"><table class="list mini">
+          <thead id="po-stock-head"></thead><tbody id="po-stock-rows"></tbody><tfoot id="po-stock-foot"></tfoot>
+        </table></div></div>
+      </div>
       <div style="display:flex;flex-direction:column;gap:8px" id="note-wrap">
         <h3 class="section-title">Tracking notes</h3>
         <div class="note-add">

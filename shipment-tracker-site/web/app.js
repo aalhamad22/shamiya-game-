@@ -104,6 +104,7 @@
     return String(nextDate(a) || '9999').localeCompare(String(nextDate(b) || '9999'));
   });
 
+  const normPoL = (p) => String(p || '').trim().toLowerCase();
   const renderList = () => {
     const all = [...S.ships.values()];
     const c = { open: 0, wait: 0, way: 0, late: 0, done: 0, all: all.length };
@@ -111,6 +112,8 @@
     for (const [k, v] of Object.entries(c)) document.querySelectorAll(`[data-n="${k}"]`).forEach((el) => { el.textContent = v; });
     const rows = filtered();
     $('count').textContent = `${rows.length} of ${all.length} shipments`;
+    const poModes = {};
+    for (const x of all) { const k = normPoL(x.po_number); if (!k) continue; (poModes[k] = poModes[k] || { n: 0, modes: new Set() }).n++; if (x.mode) poModes[k].modes.add(x.mode); }
     const docCount = {};
     for (const d of S.docs.values()) docCount[d.shipment_id] = (docCount[d.shipment_id] || 0) + 1;
     const body = $('rows');
@@ -128,7 +131,7 @@
       const n = docCount[s.id];
       return h('tr', { tabindex: 0, onclick: () => openSheet(s.id), onkeydown: (e) => { if (e.key === 'Enter') openSheet(s.id); } },
         h('td', { class: 'mono' }, fmtNum(s.sn)),
-        h('td', { class: 'prod' }, s.product, h('small', null, [s.kind, s.po_number ? 'PO ' + s.po_number : '', s.qty ? fmtNum(s.qty) + ' pcs' : '', s.company].filter(Boolean).join(' · '), n ? h('span', { class: 'clip', text: ' · ' + n + (n === 1 ? ' document' : ' documents') }) : '')),
+        h('td', { class: 'prod' }, s.product, h('small', null, [s.kind, s.po_number ? 'PO ' + s.po_number : '', s.qty ? fmtNum(s.qty) + ' pcs' : '', s.company].filter(Boolean).join(' · '), n ? h('span', { class: 'clip', text: ' · ' + n + (n === 1 ? ' document' : ' documents') }) : '', (() => { const pm = poModes[normPoL(s.po_number)]; return pm && pm.n > 1 ? h('span', { class: 'clip', text: ' · split: ' + pm.n + ' parts' + (pm.modes.size ? ' (' + [...pm.modes].join(' + ') + ')' : '') }) : ''; })())),
         h('td', null, h('span', { class: 'pill ' + g, text: g === 'other' ? (s.status || 'Other') : STAGE_LABEL[g] })),
         etaCell,
         h('td', { class: 'hide-sm' }, s.mode || ''),
@@ -143,6 +146,7 @@
     const box = h('div', { class: 'what' });
     if (ev.field === 'note') { box.append('Added a note'); return [box, h('div', { class: 'note', text: ev.new_value || '' })]; }
     if (ev.field === 'created') { box.append('Added this shipment'); return [box]; }
+    if (ev.field === 'split' || ev.field === 'stock') { box.append(h('b', { text: ev.field === 'split' ? 'Split: ' : 'Stock: ' }), ev.new_value || ''); return [box]; }
     if (ev.field === 'file') { box.append('Uploaded ', h('b', { text: (ev.label || 'document').toLowerCase() }), ': ', ev.new_value || ''); return [box]; }
     const isDate = DATE_FIELDS.includes(ev.field);
     const f = (v) => (v === null || v === undefined || v === '' ? 'blank' : isDate ? fmtDate(v) : String(v));
@@ -213,7 +217,9 @@
     $('note-wrap').hidden = !s; $('docs-wrap').hidden = !s; upMsg(UP_HINT);
     S.detail = [];
     $('sh-log').replaceChildren(h('div', { class: 'empty', text: s ? 'Loading history…' : 'History starts when you save.' }));
-    if (s) { loadDetail(id); renderDocs(); }
+    $('split-wrap').hidden = !s; $('stock-wrap').hidden = !s; $('po-stock-wrap').hidden = true;
+    $('stock-preview').hidden = true; $('stock-confirm').hidden = true; S.items = []; pending = null;
+    if (s) { loadDetail(id); renderDocs(); renderSplit(); stockMsg(STOCK_HINT); renderStock(); loadItems(); }
     if (!$('sheet').open) $('sheet').showModal();
     try { history.replaceState(null, '', '#' + (s ? 'ship-' + id : 'new')); } catch (e) { /* ignore */ }
   };
@@ -339,6 +345,283 @@
   ['dragenter', 'dragover'].forEach((t) => upWrap.addEventListener(t, (e) => { e.preventDefault(); upWrap.classList.add('drag'); }));
   ['dragleave', 'drop'].forEach((t) => upWrap.addEventListener(t, (e) => { e.preventDefault(); upWrap.classList.remove('drag'); }));
   upWrap.addEventListener('drop', (e) => { const f = e.dataTransfer && e.dataTransfer.files[0]; if (f) uploadFile(f); });
+
+  // ---------- split shipments (same PO, part by air, part by sea) ----------
+  const normPo = (p) => String(p || '').trim().toLowerCase();
+  const groupOf = (s) => {
+    if (!s) return [];
+    const all = [...S.ships.values()];
+    const seen = new Set([s.id]);
+    const queue = [s];
+    while (queue.length) {
+      const cur = queue.shift();
+      for (const x of all) {
+        if (seen.has(x.id)) continue;
+        const linked = (normPo(cur.po_number) && normPo(x.po_number) === normPo(cur.po_number)) || x.parent_id === cur.id || cur.parent_id === x.id;
+        if (linked) { seen.add(x.id); queue.push(x); }
+      }
+    }
+    return all.filter((x) => seen.has(x.id)).sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
+  };
+  const modeTag = (m) => { const k = String(m || '').toLowerCase(); return h('span', { class: 'mode ' + (['air', 'sea', 'land'].includes(k) ? k : 'none'), text: m || 'No mode' }); };
+  const renderSplit = () => {
+    const s = S.ships.get(S.openId);
+    if (!s) return;
+    const group = groupOf(s);
+    $('split-hint').textContent = group.length > 1
+      ? 'This order is sent as ' + group.length + ' shipments' + (s.po_number ? ' under PO ' + s.po_number : '') + '. Each part has its own ETA, status and stock list.'
+      : (s.po_number ? 'Only this shipment has PO ' + s.po_number + '. If part of the order goes another way, split it here.' : 'Add the PO number above so all parts of the order stay together. You can split this shipment when part of it goes by air and part by sea.');
+    $('split-list').replaceChildren(...group.map((x) => {
+      const g = stageOf(x);
+      const cur = x.id === s.id;
+      const date = g === 'wait' ? (x.ready_on ? 'Ready ' + fmtShort(x.ready_on) : 'No date') : g === 'done' ? (x.arrived_on ? 'Arrived ' + fmtShort(x.arrived_on) : 'Arrived') : (x.eta ? 'ETA ' + fmtShort(x.eta) : 'No ETA');
+      return h('div', { class: 'part' + (cur ? ' cur' : ''), onclick: cur ? null : () => openSheet(x.id) },
+        h('div', { style: 'min-width:0' }, h('div', { class: 'nm' }, modeTag(x.mode), x.product),
+          h('div', { class: 'sub', text: [cur ? 'This shipment' : '', x.qty ? fmtNum(x.qty) + ' pcs' : '', x.carrier, date].filter(Boolean).join(' · ') })),
+        h('span', { class: 'pill ' + g, text: g === 'other' ? (x.status || 'Other') : STAGE_LABEL[g] }));
+    }));
+    $('split-form').hidden = true; $('split-open').hidden = false;
+  };
+  $('split-open').addEventListener('click', () => {
+    const s = S.ships.get(S.openId);
+    if (!s) return;
+    const m = String(s.mode || '').toLowerCase();
+    $('sp-mode').value = m === 'air' ? 'Sea' : 'Air';
+    $('sp-qty').value = ''; $('sp-eta').value = ''; $('sp-carrier').value = ''; $('sp-tracking').value = '';
+    $('sp-qty-hint').textContent = s.qty ? 'Taken out of this shipment\'s ' + fmtNum(s.qty) + ' pcs' : 'This shipment has no Qty yet';
+    $('sp-err').hidden = true; $('split-form').hidden = false; $('split-open').hidden = true;
+    $('sp-qty').focus();
+  });
+  $('sp-cancel').addEventListener('click', () => { $('split-form').hidden = true; $('split-open').hidden = false; });
+  $('split-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const s = S.ships.get(S.openId);
+    if (!s) return;
+    const qty = $('sp-qty').value.trim() === '' ? null : Number($('sp-qty').value);
+    const err = (t) => { $('sp-err').textContent = t; $('sp-err').hidden = false; };
+    if (qty !== null && (!(qty > 0) || (s.qty && qty >= Number(s.qty)))) { err(s.qty ? 'Enter a Qty between 1 and ' + fmtNum(Number(s.qty) - 1) + '.' : 'Enter a Qty above 0.'); return; }
+    const mode = $('sp-mode').value;
+    $('sp-go').disabled = true;
+    try {
+      const part = {
+        kind: s.kind, sn: s.sn, product: s.product, po_number: s.po_number || '', company: s.company, contact: s.contact, month: s.month,
+        mode, qty, eta: $('sp-eta').value || null, carrier: $('sp-carrier').value.trim(), tracking: $('sp-tracking').value.trim(),
+        status: s.status || 'Not pick up yet', remarks: '', parent_id: s.parent_id || s.id, source: 'Split from ' + (s.mode ? s.mode.toLowerCase() + ' ' : '') + 'shipment S/N ' + (s.sn ?? ''),
+      };
+      const { data, error } = await S.sb.from('shipments').insert(part).select().single();
+      if (error) throw error;
+      S.ships.set(data.id, data);
+      if (qty !== null && s.qty) {
+        const { data: upd, error: e2 } = await S.sb.from('shipments').update({ qty: Number(s.qty) - qty }).eq('id', s.id).select().single();
+        if (!e2 && upd) { S.ships.set(upd.id, upd); $('f-qty').value = upd.qty ?? ''; }
+      }
+      await S.sb.from('history').insert({ shipment_id: s.id, field: 'split', label: 'Split', new_value: (qty !== null ? fmtNum(qty) + ' pcs' : 'Part of the order') + ' moved to a new ' + mode.toLowerCase() + ' shipment', changed_by: S.me });
+      await S.sb.from('history').insert({ shipment_id: data.id, field: 'split', label: 'Split', new_value: 'Created as the ' + mode.toLowerCase() + ' part of ' + (s.po_number ? 'PO ' + s.po_number : 'S/N ' + (s.sn ?? '')), changed_by: S.me });
+      toast('New ' + mode.toLowerCase() + ' part created.');
+      renderSplit(); renderList(); loadDetail(s.id); queueRefresh();
+    } catch (ex) { err(errText(ex)); }
+    finally { $('sp-go').disabled = false; }
+  });
+
+  // ---------- stock lines ----------
+  S.items = [];
+  const loadItems = async () => {
+    const s = S.ships.get(S.openId);
+    if (!s) return;
+    const ids = groupOf(s).map((x) => x.id);
+    const { data, error } = await S.sb.from('shipment_items').select('*').in('shipment_id', ids).order('id').limit(10000);
+    if (error) { $('stock-msg').textContent = 'Could not load the stock list: ' + errText(error); return; }
+    if (S.openId === s.id) { S.items = data; renderStock(); }
+  };
+  const itemKey = (i) => [i.sku || i.description, i.color, i.size].map((x) => String(x || '').trim().toLowerCase()).join('|');
+  const renderStock = () => {
+    const s = S.ships.get(S.openId);
+    if (!s) return;
+    const mine = S.items.filter((i) => i.shipment_id === s.id);
+    const body = $('stock-rows');
+    if (!mine.length) body.replaceChildren(h('tr', null, h('td', { colspan: 6, class: 'empty', text: 'No stock list yet. Import the packing list or stock sheet for this shipment.' })));
+    else body.replaceChildren(...mine.map((i) => h('tr', null, h('td', { class: 'mono', text: i.sku || '' }), h('td', { text: i.description || '' }), h('td', { class: 'hide-sm', text: i.color || '' }), h('td', { class: 'hide-sm', text: i.size || '' }), h('td', { class: 'num hide-sm', text: fmtNum(i.cartons) }), h('td', { class: 'num', text: fmtNum(i.qty) }))));
+    const tq = mine.reduce((a, i) => a + (Number(i.qty) || 0), 0), tc = mine.reduce((a, i) => a + (Number(i.cartons) || 0), 0);
+    $('stock-foot').hidden = !mine.length;
+    $('stock-foot').replaceChildren(h('tr', null, h('td', { colspan: 4, text: 'Total · ' + mine.length + (mine.length === 1 ? ' line' : ' lines') }), h('td', { class: 'num hide-sm', text: tc ? fmtNum(tc) : '' }), h('td', { class: 'num', text: fmtNum(tq) })));
+    $('stock-clear').hidden = !(mine.length && S.profile && S.profile.role === 'admin');
+    // across the PO
+    const group = groupOf(s);
+    const wrap = $('po-stock-wrap');
+    if (group.length < 2 || !S.items.length) { wrap.hidden = true; return; }
+    wrap.hidden = false;
+    const modeOf = (id) => { const m = String((S.ships.get(id) || {}).mode || '').trim(); return m ? m[0].toUpperCase() + m.slice(1).toLowerCase() : 'No mode'; };
+    const modes = [...new Set(group.map((g) => modeOf(g.id)))].sort((a, b) => ['Air', 'Sea', 'Land'].indexOf(a) - ['Air', 'Sea', 'Land'].indexOf(b));
+    const rows = new Map();
+    for (const i of S.items) {
+      const k = itemKey(i);
+      if (!rows.has(k)) rows.set(k, { sku: i.sku, description: i.description, color: i.color, size: i.size, by: {} });
+      const r = rows.get(k); const m = modeOf(i.shipment_id);
+      r.by[m] = (r.by[m] || 0) + (Number(i.qty) || 0);
+    }
+    $('po-stock-head').replaceChildren(h('tr', null, h('th', { text: 'Item' }), ...modes.map((m) => h('th', { class: 'num', text: m })), h('th', { class: 'num', text: 'Total' })));
+    const list = [...rows.values()];
+    $('po-stock-rows').replaceChildren(...list.map((r) => {
+      const total = modes.reduce((a, m) => a + (r.by[m] || 0), 0);
+      return h('tr', null, h('td', null, [r.sku, r.description].filter(Boolean).join(' · '), r.color || r.size ? h('div', { class: 'muted', style: 'font-size:12px', text: [r.color, r.size].filter(Boolean).join(' · ') }) : ''),
+        ...modes.map((m) => h('td', { class: 'num', text: r.by[m] ? fmtNum(r.by[m]) : '–' })), h('td', { class: 'num', text: fmtNum(total) }));
+    }));
+    const sums = modes.map((m) => list.reduce((a, r) => a + (r.by[m] || 0), 0));
+    $('po-stock-foot').replaceChildren(h('tr', null, h('td', { text: 'Total' }), ...sums.map((v) => h('td', { class: 'num', text: fmtNum(v) })), h('td', { class: 'num', text: fmtNum(sums.reduce((a, b) => a + b, 0)) })));
+  };
+
+  const STOCK_HINT = 'Excel or CSV with columns like SKU, Description, Color, Size, Cartons, Qty. A packing list usually works as it is.';
+  const stockMsg = (t, bad) => { $('stock-msg').textContent = t; $('stock-msg').className = 'hint' + (bad ? ' bad' : ''); };
+  let xlsxReady = null;
+  const loadXlsx = () => xlsxReady || (xlsxReady = new Promise((res, rej) => {
+    if (window.XLSX) { res(window.XLSX); return; }
+    const sc = document.createElement('script'); sc.src = 'vendor/xlsx.full.min.js';
+    sc.onload = () => res(window.XLSX); sc.onerror = () => { xlsxReady = null; rej(new Error('Could not load the Excel reader. Check your connection.')); };
+    document.head.append(sc);
+  }));
+  const parseCsv = (text) => {
+    const out = []; let row = [], cell = '', q = false;
+    const sep = (text.split('\n')[0].match(/;/g) || []).length > (text.split('\n')[0].match(/,/g) || []).length ? ';' : ',';
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      if (q) { if (ch === '"' && text[i + 1] === '"') { cell += '"'; i++; } else if (ch === '"') q = false; else cell += ch; }
+      else if (ch === '"') q = true;
+      else if (ch === sep) { row.push(cell); cell = ''; }
+      else if (ch === '\n' || ch === '\r') { if (ch === '\r' && text[i + 1] === '\n') i++; row.push(cell); out.push(row); row = []; cell = ''; }
+      else cell += ch;
+    }
+    if (cell !== '' || row.length) { row.push(cell); out.push(row); }
+    return out;
+  };
+  const COLS = [
+    ['qty', /^(total\s*)?(qty|q'?ty|quantity|pcs|pieces|units|total\s*pcs|total\s*qty)\b|quantity|\bpcs\b|\bqty\b/i],
+    ['cartons', /carton|\bctns?\b|\bboxe?s?\b|no\.?\s*of\s*(ctn|box)/i],
+    ['sku', /\bsku\b|item\s*(code|no)|style|article|\bcode\b|model|\bref\b|barcode|part\s*no/i],
+    ['color', /colou?r/i],
+    ['size', /\bsize\b/i],
+    ['description', /desc|item|product|name|goods|article/i],
+  ];
+  const mapHeader = (row) => {
+    const map = {};
+    row.forEach((cellv, idx) => {
+      const t = String(cellv ?? '').trim();
+      if (!t) return;
+      for (const [k, re] of COLS) { if (map[k] === undefined && re.test(t)) { map[k] = idx; return; } }
+    });
+    return map;
+  };
+  const toNum = (v) => { if (v === null || v === undefined || v === '') return null; if (typeof v === 'number') return v; const n = parseFloat(String(v).replace(/[^0-9.\-]/g, '')); return isNaN(n) ? null : n; };
+  const buildLines = (rows) => {
+    let hi = -1, map = null;
+    for (let r = 0; r < Math.min(rows.length, 25); r++) {
+      const m = mapHeader(rows[r] || []);
+      if (m.qty !== undefined && (m.sku !== undefined || m.description !== undefined)) { hi = r; map = m; break; }
+    }
+    if (hi < 0) return { error: 'Could not find a header row with a Qty column and an item or SKU column. Use the template, or rename the columns to SKU, Description, Qty.' };
+    const lines = [];
+    for (const r of rows.slice(hi + 1)) {
+      const g = (k) => (map[k] === undefined ? '' : String(r[map[k]] ?? '').trim());
+      const qty = toNum(map.qty === undefined ? null : r[map.qty]);
+      const sku = g('sku'), desc = g('description');
+      if (qty === null || (!sku && !desc)) continue;
+      if (/^(sub)?total|^grand/i.test(sku) || /^(sub)?total|^grand/i.test(desc)) continue;
+      lines.push({ sku, description: desc, color: g('color'), size: g('size'), cartons: toNum(map.cartons === undefined ? null : r[map.cartons]), qty });
+    }
+    if (!lines.length) return { error: 'The file has a header row but no lines with a quantity.' };
+    const headers = rows[hi];
+    const used = Object.entries(map).map(([k, i]) => String(headers[i]).trim() + ' → ' + { sku: 'SKU', description: 'Item', color: 'Color', size: 'Size', cartons: 'Cartons', qty: 'Qty' }[k]);
+    return { lines, used };
+  };
+  let pending = null;
+  $('stock-file').addEventListener('change', async () => {
+    const file = $('stock-file').files[0];
+    $('stock-file').value = '';
+    const s = S.ships.get(S.openId);
+    if (!file || !s) return;
+    const ext = (file.name.split('.').pop() || '').toLowerCase();
+    stockMsg('Reading ' + file.name + '…');
+    try {
+      let rows;
+      if (ext === 'csv') rows = parseCsv(await file.text());
+      else {
+        const X = await loadXlsx();
+        const wb = X.read(await file.arrayBuffer(), { type: 'array' });
+        let best = null;
+        for (const name of wb.SheetNames) {
+          const r = X.utils.sheet_to_json(wb.Sheets[name], { header: 1, raw: true, defval: '' });
+          const b = buildLines(r);
+          if (!b.error && (!best || b.lines.length > best.lines.length)) best = Object.assign(b, { sheet: name });
+        }
+        if (!best) { rows = X.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: '' }); }
+        else { pending = Object.assign(best, { file: file.name }); showPreview(); return; }
+      }
+      const b = buildLines(rows);
+      if (b.error) { stockMsg(b.error, true); return; }
+      pending = Object.assign(b, { file: file.name }); showPreview();
+    } catch (ex) { stockMsg('Could not read the file: ' + errText(ex), true); }
+  });
+  const showPreview = () => {
+    const p = pending; const total = p.lines.reduce((a, l) => a + (Number(l.qty) || 0), 0);
+    const s = S.ships.get(S.openId);
+    stockMsg(STOCK_HINT);
+    const setQty = h('input', { type: 'checkbox', id: 'stock-setqty' });
+    if (!s.qty) setQty.checked = true;
+    $('stock-preview').hidden = false;
+    $('stock-preview').replaceChildren(
+      h('div', { style: 'padding:12px 14px;display:flex;flex-direction:column;gap:8px' },
+        h('div', null, h('b', { text: p.file }), (p.sheet ? ' (sheet "' + p.sheet + '")' : ''), ': ', h('b', { text: p.lines.length + ' lines, ' + fmtNum(total) + ' pcs' }), ' will be added to this ', h('b', { text: (s.mode || '').toLowerCase() || '' }), ' shipment.'),
+        h('div', { class: 'muted', style: 'font-size:12px', text: 'Columns found: ' + p.used.join(', ') }),
+        h('div', { class: 'scroll' }, h('table', { class: 'list mini' },
+          h('thead', null, h('tr', null, ...['SKU', 'Item', 'Color', 'Size', 'Cartons', 'Qty'].map((t, i) => h('th', { class: i > 3 ? 'num' : '', text: t })))),
+          h('tbody', null, ...p.lines.slice(0, 8).map((l) => h('tr', null, h('td', { class: 'mono', text: l.sku }), h('td', { text: l.description }), h('td', { text: l.color }), h('td', { text: l.size }), h('td', { class: 'num', text: fmtNum(l.cartons) }), h('td', { class: 'num', text: fmtNum(l.qty) })))))),
+        p.lines.length > 8 ? h('div', { class: 'muted', style: 'font-size:12px', text: '…and ' + (p.lines.length - 8) + ' more lines' }) : '',
+        h('label', { style: 'display:flex;gap:8px;align-items:center' }, setQty, 'Set this shipment\'s Qty to ' + fmtNum(total) + ' pcs'),
+        h('div', { class: 'actions' },
+          h('button', { class: 'btn primary', type: 'button', text: 'Add ' + p.lines.length + ' lines', onclick: (e) => saveStock(e.target, setQty.checked, total) }),
+          h('button', { class: 'btn', type: 'button', text: 'Cancel', onclick: () => { pending = null; $('stock-preview').hidden = true; } }))));
+  };
+  const saveStock = async (btn, setQty, total) => {
+    const s = S.ships.get(S.openId);
+    if (!pending || !s) return;
+    btn.disabled = true;
+    const importId = 'imp-' + Date.now().toString(36);
+    try {
+      const rows = pending.lines.map((l) => Object.assign({ shipment_id: s.id, import_id: importId, created_by: S.me }, l));
+      for (let i = 0; i < rows.length; i += 500) {
+        stockMsg('Saving lines ' + (i + 1) + '–' + Math.min(i + 500, rows.length) + ' of ' + rows.length + '…');
+        const { error } = await S.sb.from('shipment_items').insert(rows.slice(i, i + 500));
+        if (error) throw error;
+      }
+      await S.sb.from('history').insert({ shipment_id: s.id, field: 'stock', label: 'Stock list', new_value: 'Imported ' + pending.file + ': ' + rows.length + ' lines, ' + fmtNum(total) + ' pcs', changed_by: S.me });
+      if (setQty && !sameNum(s.qty, total)) {
+        const { data } = await S.sb.from('shipments').update({ qty: total }).eq('id', s.id).select().single();
+        if (data) { S.ships.set(data.id, data); $('f-qty').value = data.qty ?? ''; }
+      }
+      pending = null; $('stock-preview').hidden = true; stockMsg(STOCK_HINT);
+      toast('Stock list added: ' + rows.length + ' lines.');
+      loadItems(); loadDetail(s.id); queueRefresh();
+    } catch (ex) { stockMsg('Could not save the stock list: ' + errText(ex), true); btn.disabled = false; }
+  };
+  $('stock-template').addEventListener('click', () => {
+    const csv = 'SKU,Description,Color,Size,Cartons,Qty\nKS-001,Kondura socks crew,Black,M,10,500\n';
+    const a = h('a', { href: URL.createObjectURL(new Blob([csv], { type: 'text/csv' })), download: 'stock-list-template.csv' });
+    document.body.append(a); a.click(); a.remove();
+  });
+  $('stock-clear').addEventListener('click', () => {
+    const s = S.ships.get(S.openId);
+    if (!s) return;
+    const n = S.items.filter((i) => i.shipment_id === s.id).length;
+    $('stock-confirm').hidden = false;
+    $('stock-confirm').replaceChildren(h('span', { text: 'Remove all ' + n + ' stock lines from this shipment? This is written to the change log.' }),
+      h('button', { class: 'btn', type: 'button', text: 'Remove lines', onclick: async (e) => {
+        e.target.disabled = true;
+        const { error } = await S.sb.from('shipment_items').delete().eq('shipment_id', s.id);
+        if (error) { toast('Could not remove the lines: ' + errText(error)); e.target.disabled = false; return; }
+        await S.sb.from('history').insert({ shipment_id: s.id, field: 'stock', label: 'Stock list', new_value: 'Removed the stock list (' + n + ' lines)', changed_by: S.me });
+        $('stock-confirm').hidden = true; toast('Stock list removed.'); loadItems(); loadDetail(s.id); queueRefresh();
+      } }),
+      h('button', { class: 'btn', type: 'button', text: 'Keep them', onclick: () => { $('stock-confirm').hidden = true; } }));
+  });
 
   // ---------- team (admin) ----------
   const renderTeam = () => {
@@ -471,7 +754,7 @@
       try {
         await Promise.all([loadShipments(), loadRecent(), loadDocs(), loadProfiles()]);
         renderList(); if (S.view === 'log') renderLog(); renderTeam();
-        if (S.openId) { fillEtaBox(S.ships.get(S.openId)); renderDocs(); loadDetail(S.openId); }
+        if (S.openId) { fillEtaBox(S.ships.get(S.openId)); renderDocs(); loadDetail(S.openId); renderSplit(); loadItems(); }
         applyHeader();
       } catch (e) { /* next change retries */ }
     }, 400);
@@ -481,6 +764,7 @@
       .on('postgres_changes', { event: '*', schema: 'public', table: 'shipments' }, queueRefresh)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'history' }, queueRefresh)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'documents' }, queueRefresh)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'shipment_items' }, queueRefresh)
       .subscribe();
     if (!S.timer) S.timer = setInterval(queueRefresh, 60000);
   };
