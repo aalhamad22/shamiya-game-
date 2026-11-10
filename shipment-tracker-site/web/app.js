@@ -42,7 +42,7 @@
     return st ? 'other' : 'wait';
   };
   const STAGE_LABEL = { wait: 'Waiting at supplier', way: 'On the way', late: 'Past ETA', done: 'Arrived', other: 'Other' };
-  const nextDate = (s) => { const g = stageOf(s); return g === 'wait' ? s.ready_on : g === 'done' ? s.arrived_on : s.eta; };
+  const nextDate = (s) => { const g = stageOf(s); return g === 'wait' ? (s.ready_on || s.eta) : g === 'done' ? s.arrived_on : s.eta; };
   const nameOf = (id) => {
     if (!id) return 'Imported from Google Sheet';
     const p = S.profiles.get(id);
@@ -195,7 +195,7 @@
     body.replaceChildren(...rows.map((s) => {
       const g = stageOf(s);
       const etaCell = h('td', { class: 'nowrap' });
-      if (g === 'wait') etaCell.append(s.ready_on ? h('span', null, 'Ready ', fmtShort(s.ready_on)) : h('span', { class: 'muted', text: 'No date' }));
+      if (g === 'wait') etaCell.append(s.ready_on ? h('span', null, 'Ready ', fmtShort(s.ready_on)) : s.eta ? h('span', null, 'ETA ', fmtShort(s.eta)) : h('span', { class: 'muted', text: 'No date' }));
       else if (g === 'done') etaCell.append(s.arrived_on ? h('span', { class: 'muted' }, 'Arrived ', fmtShort(s.arrived_on)) : '');
       else if (s.eta) {
         etaCell.append(fmtDate(s.eta));
@@ -293,6 +293,7 @@
     S.detail = [];
     $('sh-log').replaceChildren(h('div', { class: 'empty', text: s ? 'Loading history…' : 'History starts when you save.' }));
     renderDeleted(s);
+    $('method-wrap').hidden = true; $('combo-form').hidden = true; $('sh-form').hidden = false; $('sh-eta').hidden = false;
     $('split-wrap').hidden = !s; $('stock-wrap').hidden = !s; $('po-stock-wrap').hidden = true;
     $('stock-preview').hidden = true; $('stock-confirm').hidden = true; S.items = []; pending = null;
     if (s) { loadDetail(id); renderDocs(); renderSplit(); stockMsg(STOCK_HINT); renderStock(); loadItems(); }
@@ -460,7 +461,7 @@
     $('split-list').replaceChildren(...group.map((x) => {
       const g = stageOf(x);
       const cur = x.id === s.id;
-      const date = g === 'wait' ? (x.ready_on ? 'Ready ' + fmtShort(x.ready_on) : 'No date') : g === 'done' ? (x.arrived_on ? 'Arrived ' + fmtShort(x.arrived_on) : 'Arrived') : (x.eta ? 'ETA ' + fmtShort(x.eta) : 'No ETA');
+      const date = g === 'wait' ? (x.ready_on ? 'Ready ' + fmtShort(x.ready_on) : x.eta ? 'ETA ' + fmtShort(x.eta) : 'No date') : g === 'done' ? (x.arrived_on ? 'Arrived ' + fmtShort(x.arrived_on) : 'Arrived') : (x.eta ? 'ETA ' + fmtShort(x.eta) : 'No ETA');
       return h('div', { class: 'part' + (cur ? ' cur' : ''), onclick: cur ? null : () => openSheet(x.id) },
         h('div', { style: 'min-width:0' }, h('div', { class: 'nm' }, modeTag(x.mode), x.product),
           h('div', { class: 'sub', text: [cur ? 'This shipment' : '', x.qty ? fmtNum(x.qty) + ' pcs' : '', x.carrier, date].filter(Boolean).join(' · ') })),
@@ -534,6 +535,7 @@
     $('stock-clear').hidden = !(mine.length && S.profile && S.profile.role === 'admin');
     // across the PO
     const group = groupOf(s);
+    $('stock-wrap').hidden = !(group.length > 1 || mine.length);
     const wrap = $('po-stock-wrap');
     if (group.length < 2 || !S.items.length) { wrap.hidden = true; return; }
     wrap.hidden = false;
@@ -619,31 +621,32 @@
     return { lines, used };
   };
   let pending = null;
+  const readStockFile = async (file) => {
+    const ext = (file.name.split('.').pop() || '').toLowerCase();
+    let rows;
+    if (ext === 'csv') rows = parseCsv(await file.text());
+    else {
+      const X = await loadXlsx();
+      const wb = X.read(await file.arrayBuffer(), { type: 'array' });
+      let best = null;
+      for (const name of wb.SheetNames) {
+        const b = buildLines(X.utils.sheet_to_json(wb.Sheets[name], { header: 1, raw: true, defval: '' }));
+        if (!b.error && (!best || b.lines.length > best.lines.length)) best = Object.assign(b, { sheet: name });
+      }
+      if (best) return Object.assign(best, { file: file.name });
+      rows = X.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: '' });
+    }
+    return Object.assign(buildLines(rows), { file: file.name });
+  };
   $('stock-file').addEventListener('change', async () => {
     const file = $('stock-file').files[0];
     $('stock-file').value = '';
-    const s = S.ships.get(S.openId);
-    if (!file || !s) return;
-    const ext = (file.name.split('.').pop() || '').toLowerCase();
+    if (!file || !S.ships.get(S.openId)) return;
     stockMsg('Reading ' + file.name + '…');
     try {
-      let rows;
-      if (ext === 'csv') rows = parseCsv(await file.text());
-      else {
-        const X = await loadXlsx();
-        const wb = X.read(await file.arrayBuffer(), { type: 'array' });
-        let best = null;
-        for (const name of wb.SheetNames) {
-          const r = X.utils.sheet_to_json(wb.Sheets[name], { header: 1, raw: true, defval: '' });
-          const b = buildLines(r);
-          if (!b.error && (!best || b.lines.length > best.lines.length)) best = Object.assign(b, { sheet: name });
-        }
-        if (!best) { rows = X.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: '' }); }
-        else { pending = Object.assign(best, { file: file.name }); showPreview(); return; }
-      }
-      const b = buildLines(rows);
+      const b = await readStockFile(file);
       if (b.error) { stockMsg(b.error, true); return; }
-      pending = Object.assign(b, { file: file.name }); showPreview();
+      pending = b; showPreview();
     } catch (ex) { stockMsg('Could not read the file: ' + errText(ex), true); }
   });
   const showPreview = () => {
@@ -795,7 +798,100 @@
   let qt; $('q').addEventListener('input', () => { clearTimeout(qt); qt = setTimeout(() => { S.q = $('q').value.trim().toLowerCase(); renderList(); }, 120); });
   $('kind').addEventListener('change', () => { S.kind = $('kind').value; renderList(); });
   $('log-filter').addEventListener('change', () => { S.logFilter = $('log-filter').value; renderLog(); });
-  $('add-btn').addEventListener('click', () => openSheet(null));
+  // ---------- adding a shipment: choose Air, Sea or Air + Sea first ----------
+  S.combo = { air: null, sea: null };
+  const showMethodStep = () => {
+    $('method-wrap').hidden = false; $('combo-form').hidden = true; $('sh-form').hidden = true; $('sh-eta').hidden = true;
+    $('sh-title').textContent = 'New shipment'; $('sh-meta').textContent = 'First choose how it is sent.';
+  };
+  $('add-btn').addEventListener('click', () => { openSheet(null); showMethodStep(); });
+  document.querySelectorAll('.method').forEach((b) => b.addEventListener('click', () => {
+    const m = b.dataset.method;
+    $('method-wrap').hidden = true;
+    if (m === 'both') {
+      $('combo-form').hidden = false;
+      $('sh-title').textContent = 'New air + sea shipment';
+      $('sh-meta').textContent = 'Fill in the order once, then the details of each shipment. Both are linked under the PO number.';
+      ['cf-product', 'cf-po', 'cf-company', 'cf-contact', 'ca-qty', 'ca-eta', 'ca-carrier', 'ca-tracking', 'cs-qty', 'cs-eta', 'cs-carrier', 'cs-tracking'].forEach((id) => { $(id).value = ''; });
+      $('cf-kind').value = S.kind || 'Bulk'; $('cf-status').value = 'Not pick up yet';
+      const kind = $('cf-kind').value;
+      $('cf-sn').value = Math.max(0, ...[...S.ships.values()].filter((x) => x.kind === kind).map((x) => Number(x.sn) || 0)) + 1;
+      S.combo = { air: null, sea: null };
+      $('ca-file-msg').textContent = 'No file yet'; $('ca-file-msg').className = 'hint';
+      $('cs-file-msg').textContent = 'No file yet'; $('cs-file-msg').className = 'hint';
+      $('cf-msg').textContent = ''; $('cf-msg').className = 'msg';
+      document.querySelectorAll('#combo-form .track-only').forEach((el) => { el.hidden = !canTrack(); });
+      $('cf-product').focus();
+    } else {
+      $('sh-form').hidden = false; $('sh-eta').hidden = false;
+      $('f-mode').value = m;
+      $('sh-title').textContent = 'New ' + m.toLowerCase() + ' shipment';
+      $('sh-meta').textContent = 'Fill in what you know. The first ETA you save becomes the promised ETA.';
+      $('f-product').focus();
+    }
+  }));
+  $('cf-back').addEventListener('click', showMethodStep);
+  $('cf-kind').addEventListener('change', () => { const kind = $('cf-kind').value; $('cf-sn').value = Math.max(0, ...[...S.ships.values()].filter((x) => x.kind === kind).map((x) => Number(x.sn) || 0)) + 1; });
+  $('cf-template').addEventListener('click', (e) => { e.preventDefault(); $('stock-template').click(); });
+  [['air', 'ca'], ['sea', 'cs']].forEach(([part, p]) => $(p + '-file').addEventListener('change', async () => {
+    const file = $(p + '-file').files[0]; $(p + '-file').value = '';
+    if (!file) return;
+    const msgEl = $(p + '-file-msg');
+    msgEl.textContent = 'Reading ' + file.name + '…'; msgEl.className = 'hint';
+    try {
+      const b = await readStockFile(file);
+      if (b.error) { S.combo[part] = null; msgEl.textContent = b.error; msgEl.className = 'hint bad'; return; }
+      const total = b.lines.reduce((a, l) => a + (Number(l.qty) || 0), 0);
+      S.combo[part] = b;
+      msgEl.textContent = file.name + ': ' + b.lines.length + ' lines, ' + fmtNum(total) + ' pcs'; msgEl.className = 'hint ok';
+      $(p + '-qty').value = total;
+    } catch (ex) { S.combo[part] = null; msgEl.textContent = 'Could not read the file: ' + errText(ex); msgEl.className = 'hint bad'; }
+  }));
+  $('combo-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const msg = (t, bad) => { $('cf-msg').textContent = t; $('cf-msg').className = 'msg' + (bad ? ' bad' : ''); };
+    const product = $('cf-product').value.trim(), po = $('cf-po').value.trim();
+    const qa = $('ca-qty').value.trim() === '' ? null : Number($('ca-qty').value), qs = $('cs-qty').value.trim() === '' ? null : Number($('cs-qty').value);
+    if (!product) { msg('Write the product name first.', true); $('cf-product').focus(); return; }
+    if (!po) { msg('Add the PO number. It links the air and sea shipments together.', true); $('cf-po').focus(); return; }
+    if (!(qa > 0)) { msg('Enter the Qty coming by air, or choose the air stock file.', true); $('ca-qty').focus(); return; }
+    if (!(qs > 0)) { msg('Enter the Qty coming by sea, or choose the sea stock file.', true); $('cs-qty').focus(); return; }
+    $('cf-go').disabled = true; msg('Creating both shipments…');
+    try {
+      const base = { kind: $('cf-kind').value, sn: $('cf-sn').value.trim() === '' ? null : Number($('cf-sn').value), product, po_number: po,
+        company: $('cf-company').value.trim(), contact: $('cf-contact').value.trim(), status: $('cf-status').value, remarks: '', source: 'Added on the website as an air + sea order' };
+      const a = await S.sb.from('shipments').insert(Object.assign({}, base, { mode: 'Air', qty: qa, eta: $('ca-eta').value || null, carrier: $('ca-carrier').value.trim() })).select().single();
+      if (a.error) throw a.error;
+      const sea = await S.sb.from('shipments').insert(Object.assign({}, base, { mode: 'Sea', qty: qs, eta: $('cs-eta').value || null, carrier: $('cs-carrier').value.trim(), parent_id: a.data.id })).select().single();
+      if (sea.error) throw sea.error;
+      S.ships.set(a.data.id, a.data); S.ships.set(sea.data.id, sea.data);
+      if ($('ca-tracking').value.trim()) await saveTracking(a.data.id, $('ca-tracking').value.trim());
+      if ($('cs-tracking').value.trim()) await saveTracking(sea.data.id, $('cs-tracking').value.trim());
+      const notes = [
+        { shipment_id: a.data.id, field: 'split', label: 'Split', new_value: 'Air part of PO ' + po + ': ' + fmtNum(qa) + ' pcs by air, ' + fmtNum(qs) + ' pcs by sea', changed_by: S.me },
+        { shipment_id: sea.data.id, field: 'split', label: 'Split', new_value: 'Sea part of PO ' + po + ': ' + fmtNum(qs) + ' pcs by sea, ' + fmtNum(qa) + ' pcs by air', changed_by: S.me },
+      ];
+      for (const [part, row] of [['air', a.data], ['sea', sea.data]]) {
+        const st = S.combo[part];
+        if (!st) continue;
+        msg('Saving the ' + part + ' stock list…');
+        const importId = 'imp-' + Date.now().toString(36) + part;
+        const lines = st.lines.map((l) => Object.assign({ shipment_id: row.id, import_id: importId, created_by: S.me }, l));
+        for (let i = 0; i < lines.length; i += 500) {
+          const { error } = await S.sb.from('shipment_items').insert(lines.slice(i, i + 500));
+          if (error) throw error;
+        }
+        notes.push({ shipment_id: row.id, field: 'stock', label: 'Stock list', new_value: 'Imported ' + st.file + ': ' + lines.length + ' lines, ' + fmtNum(lines.reduce((x, l) => x + (Number(l.qty) || 0), 0)) + ' pcs', changed_by: S.me });
+      }
+      await S.sb.from('history').insert(notes);
+      toast('Air and sea shipments created for PO ' + po + '.');
+      closeSheet();
+      $('q').value = po; S.q = po.toLowerCase();
+      S.stage = 'all'; document.querySelectorAll('.stage').forEach((x) => x.setAttribute('aria-pressed', x.dataset.stage === 'all'));
+      renderList(); queueRefresh();
+    } catch (ex) { msg(errText(ex), true); }
+    finally { $('cf-go').disabled = false; }
+  });
 
   // ---------- account ----------
   const showSignIn = (text) => gate('Sign in', text || 'Use the email and password you signed up with.', 'in-form');

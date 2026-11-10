@@ -191,6 +191,18 @@ html, body { margin: 0; }
   .sortb .ar { font-size: 10px; opacity: .35; }
   th[aria-sort="ascending"] .sortb, th[aria-sort="descending"] .sortb { color: var(--accent); font-weight: 600; }
   th[aria-sort="ascending"] .sortb .ar, th[aria-sort="descending"] .sortb .ar { opacity: 1; }
+  .methods { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+  @media (max-width: 480px) { .methods { grid-template-columns: 1fr; } }
+  .method { text-align: left; border: 1.5px solid var(--line); background: var(--panel); border-radius: 10px; padding: 14px; cursor: pointer; display: flex; flex-direction: column; gap: 4px; }
+  .method:hover { border-color: var(--accent); background: var(--accent-soft); }
+  .method b { font-family: var(--f-display); font-size: 17px; }
+  .method span { font-size: 12px; color: var(--muted); }
+  .partcard { border: 1px solid var(--line); border-radius: 10px; padding: 12px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .partcard h4 { grid-column: 1 / -1; margin: 0; font-family: var(--f-display); font-size: 15px; display: flex; align-items: center; gap: 6px; }
+  .partcard .full { grid-column: 1 / -1; }
+  @media (max-width: 480px) { .partcard { grid-template-columns: 1fr; } }
+  .filepick { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .filepick .hint.ok { color: var(--ok); }
   footer { color: var(--muted); font-size: 12px; padding-block: 24px 32px; }
 
 </style>
@@ -353,6 +365,48 @@ html, body { margin: 0; }
     </div>
     <div class="sheet-body">
       <div class="confirm" id="del-banner" hidden></div>
+      <div class="blk" id="method-wrap" hidden>
+        <h3 class="section-title">How is this shipment sent?</h3>
+        <div class="methods">
+          <button type="button" class="method" data-method="Air"><b>Air</b><span>The whole order comes by air</span></button>
+          <button type="button" class="method" data-method="Sea"><b>Sea</b><span>The whole order comes by sea</span></button>
+          <button type="button" class="method" data-method="both"><b>Air + Sea</b><span>The order is split: part by air, part by sea</span></button>
+        </div>
+      </div>
+      <form id="combo-form" novalidate hidden>
+        <div style="display:flex;flex-direction:column;gap:14px">
+          <fieldset>
+            <legend>Order (shared by both shipments)</legend>
+            <div class="fld full"><label for="cf-product">Product</label><input id="cf-product" type="text"></div>
+            <div class="fld"><label for="cf-po">PO number</label><input id="cf-po" type="text" placeholder="e.g. PO-2026-0153"></div>
+            <div class="fld"><label for="cf-status">Status</label><select id="cf-status"><option>Not pick up yet</option><option>Picked up</option></select></div>
+            <div class="fld"><label for="cf-kind">Sheet</label><select id="cf-kind"><option>Bulk</option><option>Sample</option></select></div>
+            <div class="fld"><label for="cf-sn">S/N</label><input id="cf-sn" type="number" step="1"></div>
+            <div class="fld"><label for="cf-company">Company</label><input id="cf-company" type="text"></div>
+            <div class="fld"><label for="cf-contact">Contact person (name only)</label><input id="cf-contact" type="text"></div>
+          </fieldset>
+          <div class="partcard" data-part="air">
+            <h4><span class="mode air">Air</span>Air shipment</h4>
+            <div class="fld"><label for="ca-qty">Qty by air</label><input id="ca-qty" type="number" step="any" min="0"></div>
+            <div class="fld"><label for="ca-eta">ETA</label><input id="ca-eta" type="date"></div>
+            <div class="fld"><label for="ca-carrier">Shipped by</label><input id="ca-carrier" type="text" placeholder="e.g. DHL"></div>
+            <div class="fld track-only"><label for="ca-tracking">Tracking no.</label><input id="ca-tracking" type="text"></div>
+            <div class="fld full"><label>Stock coming by air (Excel or CSV)</label>
+              <div class="filepick"><label class="btn" for="ca-file">Choose file</label><input id="ca-file" type="file" accept=".xlsx,.xls,.csv" hidden><span class="hint" id="ca-file-msg">No file yet</span></div></div>
+          </div>
+          <div class="partcard" data-part="sea">
+            <h4><span class="mode sea">Sea</span>Sea shipment</h4>
+            <div class="fld"><label for="cs-qty">Qty by sea</label><input id="cs-qty" type="number" step="any" min="0"></div>
+            <div class="fld"><label for="cs-eta">ETA</label><input id="cs-eta" type="date"></div>
+            <div class="fld"><label for="cs-carrier">Shipped by</label><input id="cs-carrier" type="text" placeholder="e.g. Frontline"></div>
+            <div class="fld track-only"><label for="cs-tracking">Tracking no.</label><input id="cs-tracking" type="text"></div>
+            <div class="fld full"><label>Stock coming by sea (Excel or CSV)</label>
+              <div class="filepick"><label class="btn" for="cs-file">Choose file</label><input id="cs-file" type="file" accept=".xlsx,.xls,.csv" hidden><span class="hint" id="cs-file-msg">No file yet</span></div></div>
+          </div>
+          <span class="hint muted" style="font-size:12px">The Qty fills in from the stock file. You can also type it. <a href="#" id="cf-template">Download the stock template</a></span>
+          <div class="actions"><button class="btn primary" type="submit" id="cf-go">Create air and sea shipments</button><button class="btn" type="button" id="cf-back">Back</button><span class="msg" id="cf-msg"></span></div>
+        </div>
+      </form>
       <div class="eta-box" id="sh-eta"></div>
       <form id="sh-form" novalidate>
         <div style="display:flex;flex-direction:column;gap:18px">
