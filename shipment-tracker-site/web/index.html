@@ -186,6 +186,11 @@ html, body { margin: 0; }
   table.mini tfoot td { font-weight: 600; border-top: 1px solid var(--line); padding: 6px 10px; }
   .num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
   .confirm { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 10px 12px; background: var(--bad-soft); border-radius: 8px; }
+  .sortb { background: none; border: 0; padding: 0; font: inherit; color: inherit; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+  .sortb:hover { color: var(--ink); }
+  .sortb .ar { font-size: 10px; opacity: .35; }
+  th[aria-sort="ascending"] .sortb, th[aria-sort="descending"] .sortb { color: var(--accent); font-weight: 600; }
+  th[aria-sort="ascending"] .sortb .ar, th[aria-sort="descending"] .sortb .ar { opacity: 1; }
   footer { color: var(--muted); font-size: 12px; padding-block: 24px 32px; }
 
 </style>
@@ -276,13 +281,34 @@ html, body { margin: 0; }
         <option value="Bulk">Bulk only</option>
         <option value="Sample">Sample only</option>
       </select>
+      <select class="sel" id="sort" aria-label="Sort by">
+        <option value="">Sort: soonest date first</option>
+        <option value="date:-1">ETA / date: latest first</option>
+        <option value="sn:-1">S/N: highest first</option>
+        <option value="sn:1">S/N: lowest first</option>
+        <option value="product:1">Shipment name: A to Z</option>
+        <option value="po:1">PO number: A to Z</option>
+        <option value="stage:1">Stage</option>
+        <option value="mode:1">Mode: air first</option>
+        <option value="carrier:1">Carrier: A to Z</option>
+        <option value="qty:-1">Qty: largest first</option>
+        <option value="total:-1">Total charges: highest first</option>
+        <option value="updated:-1">Last changed first</option>
+        <option value="created:-1">Newest added first</option>
+      </select>
+      <button class="btn" type="button" id="sort-dir" title="Reverse the order" aria-label="Reverse the order">⇅</button>
       <span class="count" id="count"></span>
     </div>
     <div class="card"><div class="scroll">
       <table class="list">
         <thead><tr>
-          <th>S/N</th><th>Shipment</th><th>Stage</th><th>ETA</th>
-          <th class="hide-sm">Mode</th><th class="hide-sm">Carrier · tracking</th><th class="hide-sm">Last change</th>
+          <th data-sort="sn"><button class="sortb" type="button">S/N <span class="ar">▲▼</span></button></th>
+          <th data-sort="product"><button class="sortb" type="button">Shipment <span class="ar">▲▼</span></button></th>
+          <th data-sort="stage"><button class="sortb" type="button">Stage <span class="ar">▲▼</span></button></th>
+          <th data-sort="date"><button class="sortb" type="button">ETA <span class="ar">▲▼</span></button></th>
+          <th class="hide-sm" data-sort="mode"><button class="sortb" type="button">Mode <span class="ar">▲▼</span></button></th>
+          <th class="hide-sm" data-sort="carrier"><button class="sortb" type="button">Carrier · tracking <span class="ar">▲▼</span></button></th>
+          <th class="hide-sm" data-sort="updated"><button class="sortb" type="button">Last change <span class="ar">▲▼</span></button></th>
         </tr></thead>
         <tbody id="rows"><tr><td colspan="7" class="empty">Loading shipments…</td></tr></tbody>
       </table>

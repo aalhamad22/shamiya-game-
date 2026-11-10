@@ -91,6 +91,60 @@
     if (S.openId === id) { S.detail = data || []; renderDetailLog(); }
   };
 
+  // ---------- sorting ----------
+  S.sort = { key: '', dir: 1 };
+  const STAGE_ORDER = { late: 0, way: 1, wait: 2, done: 3, other: 4 };
+  const MODE_ORDER = { air: 0, sea: 1, land: 2 };
+  const SORT_VAL = {
+    sn: (s) => (s.sn === null || s.sn === undefined ? null : Number(s.sn)),
+    product: (s) => String(s.product || '').trim().toLowerCase() || null,
+    po: (s) => String(s.po_number || '').trim().toLowerCase() || null,
+    stage: (s) => STAGE_ORDER[stageOf(s)],
+    date: (s) => nextDate(s) || null,
+    mode: (s) => { const m = String(s.mode || '').trim().toLowerCase(); return m ? (m in MODE_ORDER ? MODE_ORDER[m] : 3) : null; },
+    carrier: (s) => String(s.carrier || '').trim().toLowerCase() || null,
+    qty: (s) => (s.qty === null || s.qty === undefined || s.qty === '' ? null : Number(s.qty)),
+    total: (s) => (s.total_kwd === null || s.total_kwd === undefined ? null : Number(s.total_kwd)),
+    updated: (s) => (s.updated_by ? s.updated_at : null),
+    created: (s) => s.created_at || null,
+  };
+  const sortCmp = (a, b) => {
+    const f = SORT_VAL[S.sort.key];
+    const va = f(a), vb = f(b);
+    if (va === null && vb === null) return (b.sn || 0) - (a.sn || 0);
+    if (va === null) return 1; // blanks always last
+    if (vb === null) return -1;
+    const c = typeof va === 'number' && typeof vb === 'number' ? va - vb : String(va).localeCompare(String(vb), 'en', { numeric: true });
+    return (c * S.sort.dir) || ((b.sn || 0) - (a.sn || 0));
+  };
+  const showSort = () => {
+    document.querySelectorAll('th[data-sort]').forEach((th) => {
+      const on = th.dataset.sort === S.sort.key;
+      if (on) th.setAttribute('aria-sort', S.sort.dir > 0 ? 'ascending' : 'descending'); else th.removeAttribute('aria-sort');
+      const ar = th.querySelector('.ar'); if (ar) ar.textContent = on ? (S.sort.dir > 0 ? '▲' : '▼') : '▲▼';
+    });
+    const v = S.sort.key ? S.sort.key + ':' + S.sort.dir : '';
+    const sel = $('sort');
+    sel.value = [...sel.options].some((o) => o.value === v) ? v : '';
+    if (S.sort.key && sel.value === '') {
+      const label = { sn: 'S/N', product: 'Shipment name', po: 'PO number', stage: 'Stage', date: 'ETA / date', mode: 'Mode', carrier: 'Carrier', qty: 'Qty', total: 'Total charges', updated: 'Last change', created: 'Newest added' }[S.sort.key];
+      let o = sel.querySelector('option[data-custom]');
+      if (!o) { o = h('option', { 'data-custom': '1' }); sel.append(o); }
+      o.value = v; o.textContent = 'Sort: ' + label + (S.sort.dir > 0 ? ' ↑' : ' ↓'); sel.value = v;
+    }
+    try { localStorage.setItem('tracker-sort', JSON.stringify(S.sort)); } catch (e) { /* ignore */ }
+  };
+  const setSort = (key, dir) => { S.sort = { key: key || '', dir: dir || 1 }; showSort(); renderList(); };
+  document.querySelectorAll('th[data-sort] .sortb').forEach((btn) => btn.addEventListener('click', () => {
+    const key = btn.closest('th').dataset.sort;
+    const firstDir = ['sn', 'updated', 'created', 'qty', 'total'].includes(key) ? -1 : 1;
+    if (S.sort.key === key) setSort(key, -S.sort.dir); else setSort(key, firstDir);
+  }));
+  $('sort').addEventListener('change', () => { const [k, d] = $('sort').value.split(':'); setSort(k, Number(d) || 1); });
+  $('sort-dir').addEventListener('click', () => { if (!S.sort.key) setSort('date', -1); else setSort(S.sort.key, -S.sort.dir); });
+  try { const saved = JSON.parse(localStorage.getItem('tracker-sort') || 'null'); if (saved && SORT_VAL[saved.key]) S.sort = saved; } catch (e) { /* ignore */ }
+  setTimeout(showSort, 0);
+
   // ---------- list ----------
   const filtered = () => [...S.ships.values()].filter((s) => {
     if (S.stage === 'deleted') { if (!s.deleted_at) return false; }
@@ -102,6 +156,7 @@
     if (S.q && ![s.sn, s.po_number, s.product, s.tracking, s.carrier, s.remarks, s.status, s.company, s.contact].join(' ').toLowerCase().includes(S.q)) return false;
     return true;
   }).sort((a, b) => {
+    if (S.sort.key) return sortCmp(a, b);
     if (S.stage === 'done' || S.stage === 'all') return String(nextDate(b) || '').localeCompare(String(nextDate(a) || '')) || (b.sn || 0) - (a.sn || 0);
     return String(nextDate(a) || '9999').localeCompare(String(nextDate(b) || '9999'));
   });
