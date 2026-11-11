@@ -464,9 +464,15 @@
       const date = g === 'wait' ? (x.ready_on ? 'Ready ' + fmtShort(x.ready_on) : x.eta ? 'ETA ' + fmtShort(x.eta) : 'No date') : g === 'done' ? (x.arrived_on ? 'Arrived ' + fmtShort(x.arrived_on) : 'Arrived') : (x.eta ? 'ETA ' + fmtShort(x.eta) : 'No ETA');
       return h('div', { class: 'part' + (cur ? ' cur' : ''), onclick: cur ? null : () => openSheet(x.id) },
         h('div', { style: 'min-width:0' }, h('div', { class: 'nm' }, modeTag(x.mode), x.product),
-          h('div', { class: 'sub', text: [cur ? 'This shipment' : '', x.qty ? fmtNum(x.qty) + ' pcs' : '', x.carrier, date].filter(Boolean).join(' · ') })),
+          h('div', { class: 'sub', text: [cur ? 'This shipment' : '', x.qty ? fmtNum(x.qty) + ' pcs' : '', x.carrier, date, x.total_kwd !== null && x.total_kwd !== undefined ? 'KWD ' + fmtNum(x.total_kwd, 3) : ''].filter(Boolean).join(' · ') })),
         h('span', { class: 'pill ' + g, text: g === 'other' ? (x.status || 'Other') : STAGE_LABEL[g] }));
     }));
+    if (group.length > 1) {
+      const withCost = group.filter((x) => x.total_kwd !== null && x.total_kwd !== undefined);
+      if (withCost.length) $('split-list').append(h('div', { class: 'part cur', style: 'cursor:default' },
+        h('div', { class: 'nm', text: 'Whole order: ' + fmtNum(group.reduce((a, x) => a + (Number(x.qty) || 0), 0)) + ' pcs' }),
+        h('b', { text: 'KWD ' + fmtNum(withCost.reduce((a, x) => a + Number(x.total_kwd), 0), 3) })));
+    }
     $('split-form').hidden = true; $('split-open').hidden = false;
   };
   $('split-open').addEventListener('click', () => {
@@ -812,7 +818,7 @@
       $('combo-form').hidden = false;
       $('sh-title').textContent = 'New air + sea shipment';
       $('sh-meta').textContent = 'Fill in the order once, then the details of each shipment. Both are linked under the PO number.';
-      ['cf-product', 'cf-po', 'cf-company', 'cf-contact', 'ca-qty', 'ca-eta', 'ca-carrier', 'ca-tracking', 'cs-qty', 'cs-eta', 'cs-carrier', 'cs-tracking'].forEach((id) => { $(id).value = ''; });
+      ['cf-product', 'cf-po', 'cf-company', 'cf-contact', ...['ca', 'cs'].flatMap((p) => ['qty', 'eta', 'carrier', 'tracking', 'ship', 'clear', 'duty', 'total', 'decl', 'dutydate'].map((f) => p + '-' + f))].forEach((id) => { $(id).value = ''; });
       $('cf-kind').value = S.kind || 'Bulk'; $('cf-status').value = 'Not pick up yet';
       const kind = $('cf-kind').value;
       $('cf-sn').value = Math.max(0, ...[...S.ships.values()].filter((x) => x.kind === kind).map((x) => Number(x.sn) || 0)) + 1;
@@ -820,6 +826,7 @@
       $('ca-file-msg').textContent = 'No file yet'; $('ca-file-msg').className = 'hint';
       $('cs-file-msg').textContent = 'No file yet'; $('cs-file-msg').className = 'hint';
       $('cf-msg').textContent = ''; $('cf-msg').className = 'msg';
+      ['cf-sum-air', 'cf-sum-sea', 'cf-sum-all'].forEach((id) => { $(id).textContent = '–'; });
       document.querySelectorAll('#combo-form .track-only').forEach((el) => { el.hidden = !canTrack(); });
       $('cf-product').focus();
     } else {
@@ -831,6 +838,19 @@
     }
   }));
   $('cf-back').addEventListener('click', showMethodStep);
+  const partTotal = (p) => {
+    const v = ['ship', 'clear', 'duty'].map((f) => $(p + '-' + f).value.trim());
+    $(p + '-total').value = v.every((x) => x === '') ? '' : (Math.round(v.reduce((a, x) => a + (Number(x) || 0), 0) * 1000) / 1000).toFixed(3);
+    const a = $('ca-total').value, s2 = $('cs-total').value;
+    $('cf-sum-air').textContent = a === '' ? '–' : fmtNum(Number(a), 3);
+    $('cf-sum-sea').textContent = s2 === '' ? '–' : fmtNum(Number(s2), 3);
+    $('cf-sum-all').textContent = a === '' && s2 === '' ? '–' : fmtNum((Number(a) || 0) + (Number(s2) || 0), 3);
+  };
+  ['ca', 'cs'].forEach((p) => ['ship', 'clear', 'duty'].forEach((f) => $(p + '-' + f).addEventListener('input', () => partTotal(p))));
+  const partFees = (p) => {
+    const n = (f) => ($(p + '-' + f).value.trim() === '' ? null : Number($(p + '-' + f).value));
+    return { shipping_kwd: n('ship'), clearance_kwd: n('clear'), duty_kwd: n('duty'), customs_declaration: $(p + '-decl').value.trim(), duty_paid_on: $(p + '-dutydate').value || null };
+  };
   $('cf-kind').addEventListener('change', () => { const kind = $('cf-kind').value; $('cf-sn').value = Math.max(0, ...[...S.ships.values()].filter((x) => x.kind === kind).map((x) => Number(x.sn) || 0)) + 1; });
   $('cf-template').addEventListener('click', (e) => { e.preventDefault(); $('stock-template').click(); });
   [['air', 'ca'], ['sea', 'cs']].forEach(([part, p]) => $(p + '-file').addEventListener('change', async () => {
@@ -860,9 +880,9 @@
     try {
       const base = { kind: $('cf-kind').value, sn: $('cf-sn').value.trim() === '' ? null : Number($('cf-sn').value), product, po_number: po,
         company: $('cf-company').value.trim(), contact: $('cf-contact').value.trim(), status: $('cf-status').value, remarks: '', source: 'Added on the website as an air + sea order' };
-      const a = await S.sb.from('shipments').insert(Object.assign({}, base, { mode: 'Air', qty: qa, eta: $('ca-eta').value || null, carrier: $('ca-carrier').value.trim() })).select().single();
+      const a = await S.sb.from('shipments').insert(Object.assign({}, base, partFees('ca'), { mode: 'Air', qty: qa, eta: $('ca-eta').value || null, carrier: $('ca-carrier').value.trim() })).select().single();
       if (a.error) throw a.error;
-      const sea = await S.sb.from('shipments').insert(Object.assign({}, base, { mode: 'Sea', qty: qs, eta: $('cs-eta').value || null, carrier: $('cs-carrier').value.trim(), parent_id: a.data.id })).select().single();
+      const sea = await S.sb.from('shipments').insert(Object.assign({}, base, partFees('cs'), { mode: 'Sea', qty: qs, eta: $('cs-eta').value || null, carrier: $('cs-carrier').value.trim(), parent_id: a.data.id })).select().single();
       if (sea.error) throw sea.error;
       S.ships.set(a.data.id, a.data); S.ships.set(sea.data.id, sea.data);
       if ($('ca-tracking').value.trim()) await saveTracking(a.data.id, $('ca-tracking').value.trim());

@@ -391,6 +391,12 @@ html, body { margin: 0; }
             <div class="fld"><label for="ca-eta">ETA</label><input id="ca-eta" type="date"></div>
             <div class="fld"><label for="ca-carrier">Shipped by</label><input id="ca-carrier" type="text" placeholder="e.g. DHL"></div>
             <div class="fld track-only"><label for="ca-tracking">Tracking no.</label><input id="ca-tracking" type="text"></div>
+            <div class="fld"><label for="ca-ship">Shipping cost (KWD)</label><input id="ca-ship" type="number" step="0.001" min="0"></div>
+            <div class="fld"><label for="ca-clear">Clearance cost (KWD)</label><input id="ca-clear" type="number" step="0.001" min="0"></div>
+            <div class="fld"><label for="ca-duty">Customs duty (KWD)</label><input id="ca-duty" type="number" step="0.001" min="0"></div>
+            <div class="fld"><label for="ca-total">Total air charges (KWD)</label><input id="ca-total" type="number" step="0.001" readonly tabindex="-1"><span class="hint">Shipping + clearance + customs duty</span></div>
+            <div class="fld"><label for="ca-decl">Customs declaration no.</label><input id="ca-decl" type="text"></div>
+            <div class="fld"><label for="ca-dutydate">Duty paid on</label><input id="ca-dutydate" type="date"></div>
             <div class="fld full"><label>Stock coming by air (Excel or CSV)</label>
               <div class="filepick"><label class="btn" for="ca-file">Choose file</label><input id="ca-file" type="file" accept=".xlsx,.xls,.csv" hidden><span class="hint" id="ca-file-msg">No file yet</span></div></div>
           </div>
@@ -400,9 +406,16 @@ html, body { margin: 0; }
             <div class="fld"><label for="cs-eta">ETA</label><input id="cs-eta" type="date"></div>
             <div class="fld"><label for="cs-carrier">Shipped by</label><input id="cs-carrier" type="text" placeholder="e.g. Frontline"></div>
             <div class="fld track-only"><label for="cs-tracking">Tracking no.</label><input id="cs-tracking" type="text"></div>
+            <div class="fld"><label for="cs-ship">Shipping cost (KWD)</label><input id="cs-ship" type="number" step="0.001" min="0"></div>
+            <div class="fld"><label for="cs-clear">Clearance cost (KWD)</label><input id="cs-clear" type="number" step="0.001" min="0"></div>
+            <div class="fld"><label for="cs-duty">Customs duty (KWD)</label><input id="cs-duty" type="number" step="0.001" min="0"></div>
+            <div class="fld"><label for="cs-total">Total sea charges (KWD)</label><input id="cs-total" type="number" step="0.001" readonly tabindex="-1"><span class="hint">Shipping + clearance + customs duty</span></div>
+            <div class="fld"><label for="cs-decl">Customs declaration no.</label><input id="cs-decl" type="text"></div>
+            <div class="fld"><label for="cs-dutydate">Duty paid on</label><input id="cs-dutydate" type="date"></div>
             <div class="fld full"><label>Stock coming by sea (Excel or CSV)</label>
               <div class="filepick"><label class="btn" for="cs-file">Choose file</label><input id="cs-file" type="file" accept=".xlsx,.xls,.csv" hidden><span class="hint" id="cs-file-msg">No file yet</span></div></div>
           </div>
+          <div class="eta-box" id="cf-sum"><div><div class="k">Air charges</div><div class="v" id="cf-sum-air">–</div></div><div><div class="k">Sea charges</div><div class="v" id="cf-sum-sea">–</div></div><div><div class="k">Whole order (KWD)</div><div class="v" id="cf-sum-all">–</div></div></div>
           <span class="hint muted" style="font-size:12px">The Qty fills in from the stock file. You can also type it. <a href="#" id="cf-template">Download the stock template</a></span>
           <div class="actions"><button class="btn primary" type="submit" id="cf-go">Create air and sea shipments</button><button class="btn" type="button" id="cf-back">Back</button><span class="msg" id="cf-msg"></span></div>
         </div>
